@@ -71,7 +71,7 @@ def check(name, cond, extra=""):
         fails.append(name)
 
 
-check("version is 1.8.0", app._APP_VERSION == "1.8.0", app._APP_VERSION)
+check("version is 1.9.0", app._APP_VERSION == "1.9.0", app._APP_VERSION)
 
 # --- 1. first answer parses -> NO retry, NO extra call -----------------------
 calls = {"n": 0}

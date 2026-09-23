@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-_APP_VERSION = "1.8.0"  # bump this when shipping new updates
+_APP_VERSION = "1.9.0"  # bump this when shipping new updates
 from copy import copy
 from datetime import date, datetime
 from io import BytesIO
@@ -232,7 +232,8 @@ SOLO_LEVELS = ["Unistructural", "Multistructural", "Relational", "Extended Abstr
 COGNITIVE_LEVELS = ["Remembering", "Understanding", "Applying", "Analyzing", "Evaluating", "Creating"]
 TIER_LEVELS = {"LOTS": ("Remembering", "Understanding"), "MOTS": ("Applying", "Analyzing"), "HOTS": ("Evaluating", "Creating")}
 BASIS_TOPIC = "Topic or competency"
-BASIS_ILAW = "Uploaded ILAW lesson plan (Excel)"
+BASIS_ILAW = "Uploaded ILAW lesson plan (Excel)"  # [LEGACY] kept for old saved sessions
+BASIS_FILES = "Uploaded ILAW / LIL files (2–5)"
 TEST_MIXES = {
     "LOTS 40% · MOTS 30% · HOTS 30% (DepEd balanced)": {"lots": 40, "mots": 30, "hots": 30},
     "Balanced (LOTS 50% · MOTS 25% · HOTS 25%)": {"lots": 50, "mots": 25, "hots": 25},
@@ -1008,6 +1009,24 @@ def detect_exemplar_meta(raw_text):
     week_match = re.search(r"\bWeeks?\s+(\d{1,2})(?:\s*(?:to|-|–)\s*(\d{1,2}))?\b", norm, re.IGNORECASE)
     if week_match:
         meta["week"] = f"Week {week_match.group(1)}"
+    # Fallbacks for exported ILAW Excel text, where labels and values sit in adjacent
+    # cells: 'Learning Area/s Science', 'Grade Level and Section Grade 9 – Hydrogen',
+    # and the combined Term/Week cell 'Term 1 / Week 3'.
+    if not meta["area"]:
+        m = re.search(r"Learning Area/s?\s*:?\s*([A-Z][A-Za-z &]{2,40}?)(?=\s+(?:Grade|Name|Term|Week|Teacher|Number|Declaration|References|None|N/A)\b|[.,;]|$)", norm)
+        if m and not any(w in m.group(1).lower() for w in ("specialist", "writer", "reviewer", "none", "n/a")):
+            picked = m.group(1).strip()
+            meta["area"] = picked.title() if picked.isupper() else picked
+    if not meta["grade"]:
+        m = re.search(r"Grade Level(?: and Section)?\s*:?\s*(Grade\s*\d{1,2}(?:\s*[-–—]\s*[A-Za-z0-9][\w \-]{0,30})?)", norm, re.IGNORECASE)
+        if m:
+            meta["grade"] = m.group(1).strip()
+    if not meta["term"]:
+        m = re.search(r"\b(Term \d)\s*/\s*Week (\d{1,2})\b", norm, re.IGNORECASE)
+        if m:
+            meta["term"] = m.group(1)
+            if not meta["week"]:
+                meta["week"] = f"Week {m.group(2)}"
     return meta
 
 
@@ -3115,29 +3134,71 @@ with lil_tab:
             st.error(f"Could not prepare the Excel file: {exc}")
 
 with test_tab:
-    st.caption("Create a HOTS-SOLO multiple-choice test paper with answer key and Table of Specifications. Works as an examination, summative test, or quiz. Use a topic, or upload an ILAW lesson plan Excel file as the basis.")
-    basis_choice = st.radio("Test basis", [BASIS_TOPIC, BASIS_ILAW], horizontal=True, help="Choose whether the test is based on a typed topic/competency or an uploaded ILAW lesson plan.")
+    st.caption("Create a HOTS-SOLO multiple-choice test paper with answer key and Table of Specifications. Works as an examination, summative test, or quiz. Upload 2–5 ILAW lesson plans or LIL logs as the basis, or type a topic.")
+    # --- STEP 1: upload 2–5 ILAW/LIL files first — they are the AI's basis. ---
+    st.subheader("1 · Basis files — upload 2 to 5 ILAW lesson plans or LIL logs")
+    t_files = st.file_uploader(
+        "Upload ILAW / LIL files * (2–5 files — PDF, Word, or Excel)",
+        type=["pdf", "docx", "xlsx", "xlsm", "xls"], accept_multiple_files=True, key="t_files",
+        help="Every uploaded file is read in full and combined as the AI's test basis. Upload the ILAW lesson "
+             "plans and/or LIL logs for the lessons covered by the test — 2 to 5 files gives the best coverage.")
+    if not isinstance(t_files, (list, tuple)):
+        t_files = []  # uploader returned None (no files) or an unexpected shape
+    t_meta, t_file_texts = {"area": "", "grade": "", "term": "", "week": ""}, []
+    if t_files:
+        if not (2 <= len(t_files) <= 5):
+            st.warning(f"You uploaded {len(t_files)} file(s). Please upload between 2 and 5 files for a well-grounded test.")
+        for t_file in t_files[:5]:
+            try:
+                t_raw = read_document_cached(t_file.name, t_file.getvalue())
+                t_file_texts.append(f"=== FILE: {t_file.name} ===\n{t_raw}")
+                t_candidate = detect_exemplar_meta(t_raw)
+                for key in ("area", "grade", "term", "week"):
+                    if not t_meta[key] and t_candidate[key]:
+                        t_meta[key] = t_candidate[key]
+            except Exception as exc:
+                st.error(f"Could not read {t_file.name}: {exc}")
+        if t_file_texts:
+            found = [f"{label}: {value}" for label, value in
+                     (("Learning Area", t_meta["area"]), ("Grade", t_meta["grade"]),
+                      ("Term", t_meta["term"]), ("Week", t_meta["week"])) if value]
+            if found:
+                st.success("Detected from your uploads — " + " · ".join(found) + ".")
+    else:
+        st.info("Upload 2–5 ILAW lesson plans / LIL logs (PDF, Word, Excel) — the app reads them all, auto-detects "
+                "the subject and grade, and builds the test strictly from their lessons and competencies.")
+    # --- STEP 2: test details (fields lock when the uploads provided them). ---
+    t_locked_area, t_locked_grade, t_locked_term = bool(t_meta["area"]), bool(t_meta["grade"]), bool(t_meta["term"])
+    t_term_index = int(t_meta["term"].split()[-1]) if t_locked_term else None
+    basis_choice = st.radio("Test basis", [BASIS_FILES, BASIS_TOPIC], horizontal=True,
+                            help="Choose whether the test is based on your uploaded files or a typed topic/competency.")
     with st.form("test_form"):
         t_left, t_right = st.columns(2)
         with t_left:
-            t_subject = st.text_input("Subject / learning area *", placeholder="e.g., Science")
-            t_grade = st.text_input("Grade level and section *", placeholder="e.g., Grade 9 – Hydrogen")
-            t_term = st.selectbox("Term", ["Term 1", "Term 2", "Term 3"])
+            t_subject = st.text_input("Subject / learning area *", value=t_meta["area"], placeholder="e.g., Science",
+                                      disabled=t_locked_area and basis_choice == BASIS_FILES,
+                                      help="Detected from your uploads." if t_locked_area else None, key="t_subject")
+            t_grade = st.text_input("Grade level and section *", value=t_meta["grade"], placeholder="e.g., Grade 9 – Hydrogen",
+                                    disabled=t_locked_grade and basis_choice == BASIS_FILES,
+                                    help="Detected from your uploads." if t_locked_grade else None, key="t_grade")
+            t_term = st.selectbox("Term", ["Term 1", "Term 2", "Term 3"], key="t_term",
+                                  disabled=t_locked_term and basis_choice == BASIS_FILES,
+                                  index=(t_term_index - 1) if (t_locked_term and basis_choice == BASIS_FILES) else None,
+                                  help="Detected from your uploads." if t_locked_term else None)
             t_items = st.selectbox("Number of items", [10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 90, 100], index=2, help="Larger tests take noticeably longer to generate.")
             t_type = st.selectbox("Test paper type", ["Examination", "Summative Test", "Quiz"], index=0, help="Shown on the printed paper header and used to guide the AI.")
         with t_right:
             t_topic = st.text_area("Topic / competency", placeholder="e.g., Photosynthesis — Grade 9, Quarter 1", disabled=basis_choice != BASIS_TOPIC, help="Used when the basis is a topic or competency.")
-            t_bow = st.file_uploader("Upload ILAW lesson plan (PDF, Word, or Excel)", type=["xlsx", "xlsm", "pdf", "docx", "xls"], disabled=basis_choice != BASIS_ILAW, help="Used when the basis is an uploaded ILAW lesson plan. PDF, Word, and Excel are all read into the AI.")
             t_mix = st.selectbox("LOTS / MOTS / HOTS mix", list(TEST_MIXES), index=0)
         t_note = st.text_area("Additional instructions (optional) — your own prompt to improve the output", placeholder="e.g., Add 5 easy items at the start; make scenarios about farming; avoid computation-heavy items; use Filipino contexts.", help="Anything you add here is sent to the AI as extra instructions for your test paper.", key="t_note")
         test_submitted = st.form_submit_button("Generate Test Paper", type="primary", use_container_width=True)
 
     if test_submitted:
         missing = [label for label, value in {"Subject / learning area": t_subject, "Grade level and section": t_grade}.items() if not value or not value.strip()]
+        if basis_choice == BASIS_FILES and len(t_file_texts) < 2:
+            missing.append("2–5 ILAW/LIL file uploads (currently " + str(len(t_file_texts)) + " readable)")
         if basis_choice == BASIS_TOPIC and not t_topic.strip():
             missing.append("Topic / competency")
-        if basis_choice == BASIS_ILAW and t_bow is None:
-            missing.append("ILAW lesson plan upload")
         if missing:
             st.error("Please complete: " + ", ".join(missing))
         elif not api_key.strip():
@@ -3145,11 +3206,13 @@ with test_tab:
         else:
             try:
                 with st.spinner("Researching official teaching-day pacing, then writing your test paper..."):
-                    basis = read_any_document(t_bow) if basis_choice == BASIS_ILAW else t_topic
-                    if basis_choice == BASIS_ILAW:
-                        basis = "Uploaded ILAW lesson plan (teacher-reviewed):\n" + basis
+                    if basis_choice == BASIS_FILES:
+                        basis = (f"UPLOADED TEACHING FILES ({len(t_file_texts)} files — ILAW lesson plans and/or LIL logs, "
+                                 "teacher-reviewed):\n\n" + "\n\n".join(t_file_texts))
+                    else:
+                        basis = t_topic
                     mix = TEST_MIXES[t_mix]
-                    test_details = {"area": t_subject, "grade": t_grade, "term": t_term, "items": t_items, "test_type": t_type, "mix": mix, "note": t_note.strip(), "hots_min": max(1, math.ceil(t_items * mix["hots"] / 100))}
+                    test_details = {"area": t_subject, "grade": t_grade, "term": t_term, "items": t_items, "test_type": t_type, "mix": mix, "note": t_note.strip(), "hots_min": max(1, math.ceil(t_items * mix["hots"] / 100)), "basis_files": [f.name for f in (t_files or [])][:5]}
                     st.session_state.test, st.session_state.test_details = generate_test(api_key, basis, test_details), test_details
             except Exception as exc:
                 st.error(f"Could not generate the test paper: {exc}")

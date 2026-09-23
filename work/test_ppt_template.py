@@ -145,7 +145,7 @@ deck3 = _LoadPptx(io.BytesIO(out3))
 check("16:9 template passthrough", abs(deck3.slide_width - _In(13.333)) < 2000 and len(deck3.slides) == 2)
 
 # --- 5. Version ---
-check("version is 1.8.0", app._APP_VERSION == "1.8.0", app._APP_VERSION)
+check("version is 1.9.0", app._APP_VERSION == "1.9.0", app._APP_VERSION)
 
 print()
 if failures:

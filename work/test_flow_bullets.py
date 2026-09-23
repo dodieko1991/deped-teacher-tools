@@ -74,7 +74,7 @@ def check(name, cond, extra=""):
         fails.append(name)
 
 
-check("version 1.8.0", app._APP_VERSION == "1.8.0")
+check("version 1.9.0", app._APP_VERSION == "1.9.0")
 
 # The EXACT text pattern from the user's screenshot: pre-lineated, mid-line phase starts, no Elicit label
 seven_es = """Elicit: The teacher asks students to write two numbers whose product is 12 and sum is 7, prompting recall of
