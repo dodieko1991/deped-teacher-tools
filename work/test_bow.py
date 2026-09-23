@@ -159,7 +159,7 @@ check("prompt: LIL keeps source-priority", "CURRICULUM SOURCE PRIORITY" in app.m
      "teacher": "T", "note": "", "exemplar": "EXEMPLAR BODY"}))
 
 # ------------------------------------------------- version
-check("version: 1.7.0", app._APP_VERSION == "1.7.0", app._APP_VERSION)
+check("version: 1.8.0", app._APP_VERSION == "1.8.0", app._APP_VERSION)
 
 print()
 if failures:

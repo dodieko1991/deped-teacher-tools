@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-_APP_VERSION = "1.7.0"  # bump this when shipping new updates
+_APP_VERSION = "1.8.0"  # bump this when shipping new updates
 from copy import copy
 from datetime import date, datetime
 from io import BytesIO
@@ -966,6 +966,49 @@ def _bow_area_grade(raw):
         pipe = re.search(r"\|\s*([A-Z][A-Za-z &]{2,40})", head)
         area = pipe.group(1).strip() if pipe else ""
     return area, grade
+
+
+def detect_exemplar_meta(raw_text):
+    """Detect Learning Area, Grade, Term, and Week from an uploaded Lesson Exemplar.
+
+    Official DepEd exemplars carry a header like 'Learning Area: GENERAL MATHEMATICS
+    Grade Level: 11 / Semester: FIRST Quarter: FIRST Unit: 1' plus week markers in
+    the body. Returns a dict of display-ready values; empty strings when not found.
+    """
+    norm = re.sub(r"\s+", " ", str(raw_text or "")).strip()
+    meta = {"area": "", "grade": "", "term": "", "week": ""}
+    role_words = ("specialist", "writer", "expert", "developer", "reviewer", "panel",
+                  "team", "coordinator", "chair", "teacher in charge", "illustrator")
+    candidates = re.findall(
+        r"Learning Area\s*:\s*([A-Za-z][A-Za-z &]{1,40}?)(?=\s+(?:Grade|Semester|Quarter|Unit|Week|Intended)\b|[.,;]|$)",
+        norm, re.IGNORECASE)
+    picked = ""
+    for candidate in candidates:
+        cleaned = candidate.strip().strip("|:").strip()
+        if not cleaned or any(word in cleaned.lower() for word in role_words):
+            continue
+        if cleaned.upper() == cleaned or any(re.search(rf"\b{re.escape(known)}\b", cleaned, re.IGNORECASE) for known in _KNOWN_AREAS):
+            picked = cleaned.title() if cleaned.isupper() else cleaned
+            break
+        picked = picked or (cleaned.title() if cleaned.isupper() else cleaned)
+    if not picked:
+        fallback = re.search(r"Lesson Exemplar (?:in|for)\s+([A-Za-z][A-Za-z &]{2,40}?)(?=\s+(?:Quarter|Unit|Week|This|L\b)|[.,]|$)", norm, re.IGNORECASE)
+        if fallback:
+            picked = fallback.group(1).strip().title()
+    meta["area"] = picked
+    grade_match = re.search(r"Grade\s*Level\s*:?\s*(\d{1,2})", norm, re.IGNORECASE) or re.search(r"\bGrade\s*[:\-]?\s*(\d{1,2})\b", norm, re.IGNORECASE)
+    meta["grade"] = f"Grade {grade_match.group(1)}" if grade_match else ""
+    semester = re.search(r"Semester\s*:?\s*(First|Second)", norm, re.IGNORECASE)
+    quarter = re.search(r"Quarter\s*:?\s*(First|Second|Third|Fourth|1|2|3|4)\b", norm, re.IGNORECASE)
+    if semester:
+        meta["term"] = "Term 1" if semester.group(1).lower() == "first" else "Term 2"
+    elif quarter:
+        quarter_num = {"first": 1, "second": 2, "third": 3, "fourth": 3, "1": 1, "2": 2, "3": 3, "4": 3}.get(quarter.group(1).lower(), 1)
+        meta["term"] = f"Term {quarter_num}"
+    week_match = re.search(r"\bWeeks?\s+(\d{1,2})(?:\s*(?:to|-|–)\s*(\d{1,2}))?\b", norm, re.IGNORECASE)
+    if week_match:
+        meta["week"] = f"Week {week_match.group(1)}"
+    return meta
 
 
 def week_lookup_for(struct, label):
@@ -2959,23 +3002,63 @@ with lesson_tab:
             st.error(f"Could not prepare the Excel file: {exc}")
 
 with lil_tab:
-    st.caption("Create a Lesson Implementation Log (LIL) from an uploaded Lesson Exemplar. One session per log — "
-               "the DepEd LIL Excel format is filled for you; Dates/Time stay blank for you to fill in.")
+    st.caption("Create a Lesson Implementation Log (LIL) from an uploaded Lesson Exemplar. The exemplar is REQUIRED — "
+               "the app reads it first and auto-detects the Learning Area, Grade Level, and Term. All sessions export to ONE "
+               "DepEd LIL Excel file; Dates/Time stay blank for you to fill in.")
     if not LIL_TEMPLATE.exists():
         st.error("The LESSON IMPLEMENTATION LOG TEMPLATE.xlsx file is missing from the app folder. Run ILAW_TeacherTools_Setup.bat to repair.")
+    # --- STEP 1: upload the Lesson Exemplar first — it drives every other field. ---
+    st.subheader("1 · Lesson Exemplar (required)")
+    lil_file = st.file_uploader("Upload Lesson Exemplar * (PDF, Word, or Excel) — the basis of the log",
+                                type=["pdf", "docx", "xlsx", "xlsm", "xls"], key="lil_file")
+    lil_meta = {"area": "", "grade": "", "term": "", "week": ""}
+    if lil_file:
+        try:
+            lil_raw = st.session_state.get("lil_exemplar_raw") or read_document_cached(lil_file.name, lil_file.getvalue())
+            st.session_state["lil_exemplar_raw"] = lil_raw
+            lil_meta = detect_exemplar_meta(lil_raw)
+            found = [f"{label}: {value}" for label, value in
+                     (("Learning Area", lil_meta["area"]), ("Grade", lil_meta["grade"]),
+                      ("Term", lil_meta["term"]), ("Week", lil_meta["week"])) if value]
+            if found:
+                st.success("Detected from your exemplar — " + " · ".join(found) +
+                           ". The locked fields below are filled from it.")
+            else:
+                st.info("Exemplar read, but no standard DepEd header (Learning Area / Grade Level / Semester / Quarter) "
+                        "was detected. Fill the fields below manually — the full exemplar text is still the AI's basis.")
+            with st.expander("See what the app read from your exemplar"):
+                st.markdown(lil_raw[:1500].replace("\n", "  \n") + ("…" if len(lil_raw) > 1500 else ""))
+        except Exception as exc:
+            st.error(f"Could not read the exemplar file: {exc}")
+            lil_meta = {"area": "", "grade": "", "term": "", "week": ""}
+    else:
+        st.info("Upload the Lesson Exemplar first — the app detects the Learning Area, Grade Level, and Term from it, "
+                "then you only confirm the rest.")
+    # --- STEP 2: log details. Fields lock when the exemplar provided them. ---
+    lil_locked_area = bool(lil_meta["area"])
+    lil_locked_grade = bool(lil_meta["grade"])
+    lil_locked_term = bool(lil_meta["term"])
+    lil_term_index = int(lil_meta["term"].split()[-1]) if lil_locked_term else None
     with st.form("lil_form"):
-        st.subheader("Log details")
+        st.subheader("2 · Log details")
         l_left, l_right = st.columns(2)
         with l_left:
-            lil_area = st.text_input("Learning Area *", placeholder="e.g., Science", key="lil_area")
-            lil_term = st.selectbox("Term", ["Term 1", "Term 2", "Term 3"], key="lil_term")
-            lil_week = st.text_input("Week *", placeholder="e.g., Week 3", key="lil_week")
+            lil_area = st.text_input("Learning Area *", value=lil_meta["area"], placeholder="e.g., Science",
+                                     disabled=lil_locked_area,
+                                     help="Detected from the uploaded exemplar." if lil_locked_area else None,
+                                     key="lil_area")
+            lil_term = st.selectbox("Term", ["Term 1", "Term 2", "Term 3"], key="lil_term",
+                                    disabled=lil_locked_term, index=(lil_term_index - 1) if lil_locked_term else None,
+                                    help="Detected from the exemplar's Semester/Quarter." if lil_locked_term else None)
+            lil_week = st.text_input("Week *", value=lil_meta["week"], placeholder="e.g., Week 3", key="lil_week")
             lil_sessions = st.selectbox("Number of sessions (one log is generated per session)", [1, 2, 3, 4, 5], key="lil_sessions")
         with l_right:
             lil_teacher = st.text_input("Teachers Name *", placeholder="Used as 'Prepared by' on the log", key="lil_teacher")
-            lil_grade = st.text_input("Grade level and section *", placeholder="e.g., Grade 9 – Hydrogen", key="lil_grade")
+            lil_grade = st.text_input("Grade level and section *", value=lil_meta["grade"], placeholder="e.g., Grade 9 – Hydrogen",
+                                      disabled=lil_locked_grade,
+                                      help="Detected from the uploaded exemplar." if lil_locked_grade else None,
+                                      key="lil_grade")
             lil_strategy = st.selectbox("Teaching Strategy Model *", TEACHING_STRATEGIES, index=None, placeholder="Select a required model", key="lil_strategy")
-        lil_file = st.file_uploader("Upload Lesson Exemplar * (PDF, Word, or Excel) — the basis of the log", type=["pdf", "docx", "xlsx", "xlsm", "xls"], key="lil_file")
         lil_note = st.text_area("Additional instructions (optional) — your own prompt to improve the output", placeholder="e.g., Base the flow on the second lesson in the exemplar; keep the assessment short; highlight cooperative learning.", help="Anything you add here is sent to the AI as extra instructions for your implementation log.", key="lil_note")
         lil_submitted = st.form_submit_button("Generate ILAW-LIL", type="primary", use_container_width=True)
 
@@ -2993,11 +3076,12 @@ with lil_tab:
         else:
             try:
                 with st.spinner("Reading the Lesson Exemplar and creating your Lesson Implementation Log..."):
+                    lil_exemplar_text = st.session_state.get("lil_exemplar_raw") or read_document_cached(lil_file.name, lil_file.getvalue())
                     lil_details = {
                         "area": lil_area, "grade": lil_grade, "teacher": lil_teacher,
                         "termweek": f"{lil_term} · {lil_week}",
                         "strategy": lil_strategy, "sessions": lil_sessions, "note": lil_note.strip(),
-                        "exemplar": read_any_document(lil_file),
+                        "exemplar": lil_exemplar_text,
                         "exemplar_filename": lil_file.name,
                     }
                     st.session_state.lil_plan, st.session_state.lil_details = generate_lil(api_key, lil_details), lil_details
