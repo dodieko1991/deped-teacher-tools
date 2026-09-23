@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-_APP_VERSION = "1.9.0"  # bump this when shipping new updates
+_APP_VERSION = "1.9.1"  # bump this when shipping new updates
 from copy import copy
 from datetime import date, datetime
 from io import BytesIO
@@ -233,7 +233,7 @@ COGNITIVE_LEVELS = ["Remembering", "Understanding", "Applying", "Analyzing", "Ev
 TIER_LEVELS = {"LOTS": ("Remembering", "Understanding"), "MOTS": ("Applying", "Analyzing"), "HOTS": ("Evaluating", "Creating")}
 BASIS_TOPIC = "Topic or competency"
 BASIS_ILAW = "Uploaded ILAW lesson plan (Excel)"  # [LEGACY] kept for old saved sessions
-BASIS_FILES = "Uploaded ILAW / LIL files (2–5)"
+BASIS_FILES = "Uploaded ILAW / LIL files (1–5)"
 TEST_MIXES = {
     "LOTS 40% · MOTS 30% · HOTS 30% (DepEd balanced)": {"lots": 40, "mots": 30, "hots": 30},
     "Balanced (LOTS 50% · MOTS 25% · HOTS 25%)": {"lots": 50, "mots": 25, "hots": 25},
@@ -3134,20 +3134,20 @@ with lil_tab:
             st.error(f"Could not prepare the Excel file: {exc}")
 
 with test_tab:
-    st.caption("Create a HOTS-SOLO multiple-choice test paper with answer key and Table of Specifications. Works as an examination, summative test, or quiz. Upload 2–5 ILAW lesson plans or LIL logs as the basis, or type a topic.")
-    # --- STEP 1: upload 2–5 ILAW/LIL files first — they are the AI's basis. ---
-    st.subheader("1 · Basis files — upload 2 to 5 ILAW lesson plans or LIL logs")
+    st.caption("Create a HOTS-SOLO multiple-choice test paper with answer key and Table of Specifications. Works as an examination, summative test, or quiz. Upload 1–5 ILAW lesson plans or LIL logs as the basis, or type a topic.")
+    # --- STEP 1: upload 1–5 ILAW/LIL files first — they are the AI's basis. ---
+    st.subheader("1 · Basis files — upload 1 to 5 ILAW lesson plans or LIL logs")
     t_files = st.file_uploader(
-        "Upload ILAW / LIL files * (2–5 files — PDF, Word, or Excel)",
+        "Upload ILAW / LIL files * (1–5 files — PDF, Word, or Excel)",
         type=["pdf", "docx", "xlsx", "xlsm", "xls"], accept_multiple_files=True, key="t_files",
         help="Every uploaded file is read in full and combined as the AI's test basis. Upload the ILAW lesson "
-             "plans and/or LIL logs for the lessons covered by the test — 2 to 5 files gives the best coverage.")
+             "plans and/or LIL logs for the lessons covered by the test — up to 5 files for the best coverage.")
     if not isinstance(t_files, (list, tuple)):
         t_files = []  # uploader returned None (no files) or an unexpected shape
     t_meta, t_file_texts = {"area": "", "grade": "", "term": "", "week": ""}, []
     if t_files:
-        if not (2 <= len(t_files) <= 5):
-            st.warning(f"You uploaded {len(t_files)} file(s). Please upload between 2 and 5 files for a well-grounded test.")
+        if not (1 <= len(t_files) <= 5):
+            st.warning(f"You uploaded {len(t_files)} file(s). Please upload between 1 and 5 files for a well-grounded test.")
         for t_file in t_files[:5]:
             try:
                 t_raw = read_document_cached(t_file.name, t_file.getvalue())
@@ -3165,7 +3165,7 @@ with test_tab:
             if found:
                 st.success("Detected from your uploads — " + " · ".join(found) + ".")
     else:
-        st.info("Upload 2–5 ILAW lesson plans / LIL logs (PDF, Word, Excel) — the app reads them all, auto-detects "
+        st.info("Upload 1–5 ILAW lesson plans / LIL logs (PDF, Word, Excel) — the app reads them all, auto-detects "
                 "the subject and grade, and builds the test strictly from their lessons and competencies.")
     # --- STEP 2: test details (fields lock when the uploads provided them). ---
     t_locked_area, t_locked_grade, t_locked_term = bool(t_meta["area"]), bool(t_meta["grade"]), bool(t_meta["term"])
@@ -3195,8 +3195,8 @@ with test_tab:
 
     if test_submitted:
         missing = [label for label, value in {"Subject / learning area": t_subject, "Grade level and section": t_grade}.items() if not value or not value.strip()]
-        if basis_choice == BASIS_FILES and len(t_file_texts) < 2:
-            missing.append("2–5 ILAW/LIL file uploads (currently " + str(len(t_file_texts)) + " readable)")
+        if basis_choice == BASIS_FILES and len(t_file_texts) < 1:
+            missing.append("1–5 ILAW/LIL file uploads (currently " + str(len(t_file_texts)) + " readable)")
         if basis_choice == BASIS_TOPIC and not t_topic.strip():
             missing.append("Topic / competency")
         if missing:

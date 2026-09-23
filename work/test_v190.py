@@ -1,4 +1,4 @@
-"""v1.9.0 — Test Paper upload-first: 2–5 ILAW/LIL files, combined basis, auto-detect."""
+"""v1.9.1 — Test Paper upload-first: 2–5 ILAW/LIL files, combined basis, auto-detect."""
 import sys, types, io
 from pathlib import Path
 
@@ -93,19 +93,19 @@ test_src = src[test_start: src.index("if test := st.session_state")]
 check("order: file uploader before test form", test_src.find("t_files") != -1
       and test_src.find('st.form("test_form")') > test_src.find("t_files"))
 check("wiring: accept_multiple_files", "accept_multiple_files=True" in test_src)
-check("wiring: 2-5 limit enforced", "2 <= len(t_files) <= 5" in test_src)
+check("wiring: 1-5 limit enforced", "1 <= len(t_files) <= 5" in test_src)
 check("wiring: files combined into basis", '"\\n\\n".join(t_file_texts)' in test_src)
 check("wiring: per-file headers in basis", "=== FILE:" in test_src)
 check("wiring: detection per file", test_src.count("detect_exemplar_meta") >= 1)
 check("wiring: locks depend on basis choice", "basis_choice == BASIS_FILES" in test_src)
-check("wiring: requires >=2 readable files", 'len(t_file_texts) < 2' in test_src)
-check("wiring: BASIS_FILES constant", 'BASIS_FILES = "Uploaded ILAW / LIL files (2–5)"' in src)
+check("wiring: requires >=1 readable file", 'len(t_file_texts) < 1' in test_src)
+check("wiring: BASIS_FILES constant", 'BASIS_FILES = "Uploaded ILAW / LIL files (1–5)"' in src)
 check("wiring: legacy BASIS_ILAW kept", "BASIS_ILAW" in src.split("BASIS_FILES")[0])
 check("wiring: basis_files in details", '"basis_files"' in test_src)
 check("order: detection before form", test_src.find("detect_exemplar_meta") < test_src.find('st.form("test_form")'))
 
 # ------------------------------------------------- version
-check("version: 1.9.0", app._APP_VERSION == "1.9.0", app._APP_VERSION)
+check("version: 1.9.1", app._APP_VERSION == "1.9.1", app._APP_VERSION)
 
 print()
 if failures:
