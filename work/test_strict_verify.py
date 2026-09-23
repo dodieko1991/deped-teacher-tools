@@ -72,7 +72,7 @@ def check(name, cond, extra=""):
         fails.append(name)
 
 
-check("version is 1.6.0", app._APP_VERSION == "1.6.0", app._APP_VERSION)
+check("version is 1.7.0", app._APP_VERSION == "1.7.0", app._APP_VERSION)
 
 # --- exact rule text lives in the constant -----------------------------------
 rule = app.STRICT_CURRICULUM_VERIFICATION

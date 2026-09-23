@@ -245,7 +245,7 @@ ppn = app.make_ppt_prompt("basis", {"slides": 16, "session_number": 1, "session_
 check("PPT prompt carries note", "Cebuano keywords please." in ppn)
 
 # --- 6. Version ---
-check("version is 1.6.0", app._APP_VERSION == "1.6.0", app._APP_VERSION)
+check("version is 1.7.0", app._APP_VERSION == "1.7.0", app._APP_VERSION)
 
 print()
 if failures:

@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-_APP_VERSION = "1.6.0"  # bump this when shipping new updates
+_APP_VERSION = "1.7.0"  # bump this when shipping new updates
 from copy import copy
 from datetime import date, datetime
 from io import BytesIO
@@ -25,6 +25,7 @@ from docx.shared import Inches, Pt
 from openpyxl import Workbook, load_workbook
 from openpyxl.cell.rich_text import CellRichText, TextBlock
 from openpyxl.cell.text import InlineFont
+from openpyxl.styles import Font
 from pypdf import PdfReader
 
 try:  # python-pptx powers the PowerPoint tab; optional so the rest of the app still runs
@@ -949,9 +950,15 @@ def parse_bow(raw_text):
 
 
 def _bow_area_grade(raw):
-    """Best-effort Learning Area + Grade detection from a BOW header/footer."""
-    head = str(raw or "")[:800]
-    grade_match = re.search(r"Grade\s*[:\-]?\s*(\d{1,2})", head, re.IGNORECASE)
+    """Best-effort Learning Area + Grade detection from a BOW header/footer.
+
+    Grade detection scans the WHOLE document (not just the header) because some
+    BOW layouts only carry the grade in the filename or a footer line.
+    """
+    whole = str(raw or "")
+    head = whole[:800]
+    grade_match = (re.search(r"Grade\s*[:\-]?\s*(\d{1,2})", head, re.IGNORECASE)
+                   or re.search(r"\bGrade\s*[:\-]?\s*(\d{1,2})\b", whole, re.IGNORECASE))
     grade = f"Grade {grade_match.group(1)}" if grade_match else ""
     area = next((candidate for candidate in _KNOWN_AREAS
                  if re.search(rf"\b{re.escape(candidate)}\b", head, re.IGNORECASE)), "")
@@ -959,6 +966,23 @@ def _bow_area_grade(raw):
         pipe = re.search(r"\|\s*([A-Z][A-Za-z &]{2,40})", head)
         area = pipe.group(1).strip() if pipe else ""
     return area, grade
+
+
+def week_lookup_for(struct, label):
+    """Resolve a week-dropdown label back to (term_index, term, row) from the parsed BOW."""
+    if not label or not struct:
+        return None
+    match = re.match(r"^(Term \d)\s*·\s*Week (\d+)", str(label))
+    if not match:
+        return None
+    term_name, week_num = match.group(1), int(match.group(2))
+    for term_index, term in enumerate(struct, start=1):
+        if str(term["term"]).lower() != term_name.lower():
+            continue
+        for row in term["weeks"]:
+            if row["from"] <= week_num <= row["to"]:
+                return term_index, term, row
+    return None
 
 
 def match_bow_row(struct, term, week):
@@ -2454,6 +2478,7 @@ def bold_references_rich(text, template=None, cell="B23"):
     if not plain:
         return ""
     font_name, font_size = _flow_base_font(template, cell)
+    font_size = 12.0
     label_font = InlineFont(rFont=font_name, sz=font_size, b=True)
     body_font = InlineFont(rFont=font_name, sz=font_size, b=False)
     entries = [line.strip()[2:].strip() if line.strip().startswith("• ") else line.strip()
@@ -2684,8 +2709,28 @@ def excel_export(plan, d, picks=None):
             alignment.wrap_text = True
             alignment.vertical = "top"
             cell.alignment = alignment
+    # TERM/WEEK in the template's own A12 label row (B12 is a merged B12:F12 cell).
+    sheet["B12"] = f"{d['term']} / {d['week']}"
+    # Auto-fit every content row so the full text is visible without manual resizing:
+    # estimate one text line per ~55 characters of a 41-wide column and add padding.
     for row in (15, 16, 18, 19, 20, 22, 23, 24, 25, 27, 29, 30):
-        sheet.row_dimensions[row].height = None
+        value = sheet[f"B{row}"].value
+        plain_len = len(str(value)) if value is not None else 0
+        if isinstance(value, CellRichText):
+            plain_len = len("".join(str(block.text) for block in value))
+        extra = max(len(str(sheet[f"{col}{row}"].value or "")) for col in ("C", "D", "E", "F"))
+        lines = max(1, math.ceil(max(plain_len, extra) / 55))
+        sheet.row_dimensions[row].height = min(409.0, max(30.0, lines * 15.0 + 8))
+    # Keep the declaration (B15) and references (B16) body text readable.
+    for ref in ("B15", "B16"):
+        font = sheet[ref].font
+        sheet[ref].font = Font(name=font.name, size=max(11.0, float(font.size or 11)))
+    for column in columns:
+        for row in (14, 19, 22, 23, 24, 25, 27, 29, 30):
+            cell = sheet[f"{column}{row}"]
+            font = cell.font
+            if float(font.size or 11) < 11.0:
+                cell.font = Font(name=font.name, size=11.0, bold=font.bold, italic=font.italic)
     output = BytesIO()
     workbook.save(output)
     output.seek(0)
@@ -2825,6 +2870,10 @@ with lesson_tab:
     # --- STEP 2: lesson details. Learning Area + Lesson name lock when a BOW is present. ---
     bow_locked = bool(bow_struct)
     week_lookup = {}
+    bow_term_index = None
+    if bow_struct:
+        hit = week_lookup_for(bow_struct, st.session_state.get("ilaw_week_bow"))
+        bow_term_index = hit[0] if hit else None
     with st.form("ilaw_form"):
         st.subheader("2 · Lesson details")
         left, right = st.columns(2)
@@ -2836,23 +2885,26 @@ with lesson_tab:
                                   value=bow_grade_hint or "", key="ilaw_grade")
             if bow_struct:
                 week_options = []
-                for t in bow_struct:
+                for t_index, t in enumerate(bow_struct, start=1):
                     for row in t["weeks"]:
                         label = f"{t['term']} · Week {row['weeks']} — {row['lesson'][:60]}"
                         week_options.append(label)
-                        week_lookup[label] = (t, row)
+                        week_lookup[label] = (t_index, t, row)
                 week = st.selectbox("Week (from your BOW) *", week_options, key="ilaw_week_bow",
                                     help="Every week row found in the BOW. The matching lesson title and "
                                          "competencies are used verbatim.")
             else:
                 week = st.text_input("Week *", placeholder="e.g., Week 3", key="ilaw_week_text")
-            term = st.selectbox("Term", ["Term 1", "Term 2", "Term 3"], key="ilaw_term")
+            term = st.selectbox("Term", ["Term 1", "Term 2", "Term 3"], key="ilaw_term",
+                                disabled=bow_locked,
+                                index=(bow_term_index - 1) if bow_locked and bow_term_index else None,
+                                help="Auto-selected from your BOW week row." if bow_locked else None)
             strategy = st.selectbox("Teaching Strategy Model *", TEACHING_STRATEGIES, index=None, placeholder="Select a required model", key="ilaw_strategy")
         with right:
             auto_title = ""
             if bow_struct:
                 hit = week_lookup.get(week)
-                auto_title = hit[1]["lesson"] if hit else (bow_struct[0]["weeks"][0]["lesson"] if bow_struct[0]["weeks"] else "")
+                auto_title = hit[2]["lesson"] if hit else (bow_struct[0]["weeks"][0]["lesson"] if bow_struct[0]["weeks"] else "")
             title = st.text_input("Name of lesson", value=auto_title, disabled=bow_locked,
                                   key="ilaw_lesson_locked",
                                   placeholder="Auto-filled from the BOW week row",
@@ -2881,9 +2933,9 @@ with lesson_tab:
                     if bow_struct:
                         hit = week_lookup.get(week)
                         if hit:
-                            bow_title = hit[1]["lesson"]
-                            week = f"Week {hit[1]['from']}"
-                            term = hit[0]["term"]
+                            bow_title = hit[2]["lesson"]
+                            week = f"Week {hit[2]['from']}"
+                            term = hit[1]["term"]
                     details = {"area": area, "grade": grade, "term": term, "week": week, "strategy": strategy,
                                "title": bow_title or title, "sessions": sessions, "duration": duration, "medium": medium,
                                "teacher": teacher, "context": context, "note": note.strip(),
