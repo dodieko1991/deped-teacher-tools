@@ -1,0 +1,36 @@
+# One-time setup: connect the app's feedback form to YOUR Google Sheet
+# (https://docs.google.com/spreadsheets/d/1V_flaZ5TpEx3UDahWMuSR9t_iURHOqJy/edit)
+#
+# WHY: Google blocks direct writes to a Sheet from any app using only the share
+# link - that is a Google security rule, nobody can bypass it. The official way
+# is a tiny Apps Script "Web App" bound to your sheet. You (the owner) deploy it
+# ONCE (~2 minutes, steps below); after that every teacher's "Send feedback"
+# inserts a row into your sheet automatically with zero setup on their side.
+#
+# ----------------------------------------------------------------------------
+# STEP-BY-STEP (one time):
+# 1. Open the sheet above -> menu: Extensions -> Apps Script.
+# 2. Delete any code there and paste EVERYTHING between the === lines below.
+# 3. Click Deploy -> New deployment -> gear icon -> choose "Web app".
+# 4. Description: feedback hook | Execute as: Me | Who has access: Anyone.
+#    (Click "Authorize access" when Google asks - it is your own sheet.)
+# 5. Copy the "Web app URL" (ends with /exec).
+# 6. Paste that URL on the empty line at the bottom of this file, save.
+# 7. Restart the app (desktop shortcut) - done. Test one submission.
+#    To change it later: edit this file and restart.
+# ----------------------------------------------------------------------------
+# =================== PASTE THIS INTO APPS SCRIPT (between the lines) ===================
+# function doPost(e) {
+#   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Feedback")
+#     || SpreadsheetApp.getActiveSpreadsheet().insertSheet("Feedback");
+#   if (sheet.getLastRow() === 0) {
+#     sheet.appendRow(["Submitted at", "Name", "Rating", "Feedback", "Suggestions"]);
+#   }
+#   var data = JSON.parse(e.postData.contents);
+#   sheet.appendRow([data.submitted_at, data.name, data.rating, data.feedback, data.suggestions]);
+#   return ContentService.createTextOutput("OK");
+# }
+# =======================================================================================================
+#
+# Then paste your Web App URL on the next line (replace the placeholder):
+PASTE_YOUR_WEB_APP_URL_HERE

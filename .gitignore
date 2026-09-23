@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Local data & runtime artifacts
+outputs/
+work/*.log
+work/__pycache__/
+feedback.xlsx
+feedback_overflow.xlsx
+
+# OS junk
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Freebuff/Codex local state
+.freebuff/
+.agents/
+.claude/
