@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-_APP_VERSION = "1.9.1"  # bump this when shipping new updates
+_APP_VERSION = "1.9.2"  # bump this when shipping new updates
 from copy import copy
 from datetime import date, datetime
 from io import BytesIO
@@ -889,7 +889,8 @@ def extract_pdf_text(uploaded_file):
 # ---------------------------------------------------------------------------
 _BOW_BULLET = r"[●•▪◦]"
 _BOW_WEEK_ROW_RE = re.compile(r"\b(\d{1,2})\s*to\s*(\d{1,2})\b")
-_BOW_TERM_MARKERS = (("Term 1", r"\bFirst\s+Term\b"), ("Term 2", r"\bSecond\s+Term\b"), ("Term 3", r"\bThird\s+Term\b"))
+_BOW_TERM_MARKERS = (("Term 1", r"\bFirst\s+Term\b"), ("Term 2", r"\bSecond\s+Term\b"), ("Term 3", r"\bThird\s+Term\b"),
+                     ("Term 1", r"\bFirst\s+Quarter\b"), ("Term 2", r"\bSecond\s+Quarter\b"), ("Term 3", r"\bThird\s+Quarter\b"))
 _KNOWN_AREAS = ("Araling Panlipunan", "Edukasyon sa Pagpapakatao", "Edukasyong Pantahanan at Pangkabuhayan",
                 "Technology and Livelihood Education", "Mathematics", "Science", "English", "Filipino",
                 "Physical Education", "Health", "Music", "Arts", "MAPEH", "TLE")
@@ -969,6 +970,21 @@ def _bow_area_grade(raw):
     return area, grade
 
 
+def term_for_week(week_num):
+    """Map a week number to its DepEd term: 1–12 → Term 1, 13–24 → Term 2, 25–36 → Term 3."""
+    try:
+        week_num = int(str(week_num).strip())
+    except (TypeError, ValueError):
+        return ""
+    if 1 <= week_num <= 12:
+        return "Term 1"
+    if 13 <= week_num <= 24:
+        return "Term 2"
+    if 25 <= week_num <= 36:
+        return "Term 3"
+    return ""
+
+
 def detect_exemplar_meta(raw_text):
     """Detect Learning Area, Grade, Term, and Week from an uploaded Lesson Exemplar.
 
@@ -1009,6 +1025,9 @@ def detect_exemplar_meta(raw_text):
     week_match = re.search(r"\bWeeks?\s+(\d{1,2})(?:\s*(?:to|-|–)\s*(\d{1,2}))?\b", norm, re.IGNORECASE)
     if week_match:
         meta["week"] = f"Week {week_match.group(1)}"
+        # Term missing? Infer it from the week (Weeks 1–12 → T1, 13–24 → T2, 25–36 → T3).
+        if not meta["term"]:
+            meta["term"] = term_for_week(week_match.group(1))
     # Fallbacks for exported ILAW Excel text, where labels and values sit in adjacent
     # cells: 'Learning Area/s Science', 'Grade Level and Section Grade 9 – Hydrogen',
     # and the combined Term/Week cell 'Term 1 / Week 3'.
@@ -2998,6 +3017,15 @@ with lesson_tab:
                             bow_title = hit[2]["lesson"]
                             week = f"Week {hit[2]['from']}"
                             term = hit[1]["term"]
+                    # No explicit Term from the source? Infer it from the week number:
+                    # Weeks 1–12 → Term 1, 13–24 → Term 2, 25–36 → Term 3.
+                    if not bow_struct:
+                        week_num_match = re.search(r"\d{1,2}", str(week or ""))
+                        derived = term_for_week(week_num_match.group(0)) if week_num_match else ""
+                        if derived:
+                            st.info(f"Term not stated in the source — inferred **{derived}** from {week} "
+                                    "(Weeks 1–12 → Term 1, 13–24 → Term 2, 25–36 → Term 3).")
+                            term = derived
                     details = {"area": area, "grade": grade, "term": term, "week": week, "strategy": strategy,
                                "title": bow_title or title, "sessions": sessions, "duration": duration, "medium": medium,
                                "teacher": teacher, "context": context, "note": note.strip(),
@@ -3096,6 +3124,13 @@ with lil_tab:
             try:
                 with st.spinner("Reading the Lesson Exemplar and creating your Lesson Implementation Log..."):
                     lil_exemplar_text = st.session_state.get("lil_exemplar_raw") or read_document_cached(lil_file.name, lil_file.getvalue())
+                    if not lil_meta.get("term"):
+                        lil_week_num = re.search(r"\d{1,2}", str(lil_week or ""))
+                        lil_derived = term_for_week(lil_week_num.group(0)) if lil_week_num else ""
+                        if lil_derived:
+                            st.info(f"Term not stated in the exemplar — inferred **{lil_derived}** from {lil_week} "
+                                    "(Weeks 1–12 → Term 1, 13–24 → Term 2, 25–36 → Term 3).")
+                            lil_term = lil_derived
                     lil_details = {
                         "area": lil_area, "grade": lil_grade, "teacher": lil_teacher,
                         "termweek": f"{lil_term} · {lil_week}",
@@ -3212,6 +3247,11 @@ with test_tab:
                     else:
                         basis = t_topic
                     mix = TEST_MIXES[t_mix]
+                    if not t_locked_term and t_meta.get("week"):
+                        t_week_num = re.search(r"\d{1,2}", str(t_meta["week"]))
+                        t_derived = term_for_week(t_week_num.group(0)) if t_week_num else ""
+                        if t_derived:
+                            t_term = t_derived
                     test_details = {"area": t_subject, "grade": t_grade, "term": t_term, "items": t_items, "test_type": t_type, "mix": mix, "note": t_note.strip(), "hots_min": max(1, math.ceil(t_items * mix["hots"] / 100)), "basis_files": [f.name for f in (t_files or [])][:5]}
                     st.session_state.test, st.session_state.test_details = generate_test(api_key, basis, test_details), test_details
             except Exception as exc:
