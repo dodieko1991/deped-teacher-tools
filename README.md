@@ -1,84 +1,104 @@
-# DepEd Teacher Tools Generator
+# 📚 DepEd Teacher Tools Generator
 
-A Streamlit app for Philippine DepEd teachers with four tools (ILAW Lesson Plan, ILAW-LIL Implementation Log, Test Paper, and PowerPoint) powered by any of four AI providers: **Google Gemini, OpenRouter, Groq, and Mistral**. Developed by **Jose Dennis Plaza Chua**.
+A Streamlit app for Philippine DepEd teachers: **ILAW Lesson Plans, ILAW-LIL Implementation Logs, Test Papers (with TOS + Answer Key), and PowerPoint generators** — all grounded on your own **Budget of Work (BOW)** and powered by any of four AI providers.
 
-## AI Provider Hub
+**Developed by: Jose Dennis Plaza Chua** · Current version: **v1.7.0**
 
-The sidebar lets each teacher pick their AI provider, paste that provider's API key, and optionally pin a model (fast or quality). All four providers produce identical app output, and each has a free tier — so when one key's quota runs out, the teacher just switches provider in the dropdown and continues with another key.
+---
 
-- **Provider**: Google Gemini (aistudio.google.com/apikey), OpenRouter (openrouter.ai/keys), Groq (console.groq.com/keys), or Mistral (console.mistral.ai/api-keys).
-- **Model picker**: per provider — *Auto pick* (recommended; skips busy/exhausted models automatically), *Fast* models, and *Quality* models. Model names change over time; the lists are maintained in `app.py` (`PROVIDERS`).
-- **Automatic fallback**: when the chosen model is unavailable (404) or its quota is spent (429/402/403), the app silently retries the provider's other models with the same request. Auth errors (401 = wrong key) fail fast with the real message.
-- **Note**: Google Gemini keeps its live web-search grounding for competency/teaching-days research; the other providers answer from their training knowledge and are prompted to say "days not stated" rather than invent pacing.
-- Keys live only in the browser session — nothing is saved to disk.
+## 🚀 HOW TO USE THIS (for other teachers)
 
-## Tabs
+### Option A — One-click installer (recommended, Windows)
 
-### 📘 ILAW Lesson Plan
-Creates a teacher-reviewed ILAW lesson-plan draft from a DepEd Budget of Work (BOW) extract.
+1. On this page, click the green **`< > Code`** button → **Download ZIP**.
+2. Extract the ZIP anywhere (e.g., Desktop).
+3. Double-click **`ILAW_TeacherTools_Setup.bat`**.
+   - It sets up everything by itself: a private Python (if your PC has none), all packages, and folders.
+   - **First run needs internet** (one-time, ~5–10 minutes). After that it starts instantly, even offline.
+   - Your browser opens the app automatically.
+4. Next time: just double-click **`Launch DepEd Teacher Tools`** on your Desktop (created by the installer).
 
-- **I — Intentions**: competency, objectives, and success criteria.
-- **L — Learning Experiences**: learner-centered activities and resources.
-- **A — Assessing Learning**: aligned formative checks and assessment tasks.
-- **W — Ways Forward**: feedback, intervention, enrichment, and next steps.
+> ⚠️ If you see *"Python was not found… Microsoft Store"* — that is just a Windows shortcut message. The installer handles Python for you; just keep it connected to the internet on first run.
 
-The BOW is optional and can be a **PDF, Word, or Excel** file. With a text-based BOW, the app extracts its text and uses it as the competency source. Without a BOW, the AI searches public sources for a candidate competency using the selected subject, grade, term, and week. The latter is a provisional draft: the teacher must verify the competency against the official BOW before using it. Either path exports the draft to the supplied weekly ILAW Excel format.
+### Option B — Already have Python 3.11+
 
-**3 options per cell (v1.1.0):** the AI returns three alternatives for every ILAW cell (topic, objectives, pre-lesson, flow, resources, integration, formative assessment, extended learning, reflection). The result is shown as a grid with a **Select** button per option; whatever the teacher does not pick defaults to Option 1 in the exported Excel. Session count supports 1–5.
-
-### 📗 ILAW-LIL — Lesson Implementation Log (v1.4.0)
-Turns an uploaded **Lesson Exemplar (PDF, Word, or Excel)** into a DepEd **Lesson Implementation Log** filled in the official LIL Excel format:
-
-- Inputs: Learning Area, Teachers Name (also used as **Prepared by**), Grade, Term + Week (joined automatically into one Term/Week cell), 1–5 sessions, and the same **Teaching Strategy Model** dropdown as the ILAW tab.
-- **Dates/Time stay blank** — the teacher fills them in after each actual session.
-- The AI copies the competency, objectives, activities, and assessment items from the exemplar (never invents content or learner names) and drafts all LIL rows: Component, Learning Competency, Objectives, Learning Resources, Weekly Implementation Log (Learning Experience, Assessing Learning, Ways Forward), and Reflection (worked well, remediation, enrichment, adjustments).
-- **3 options per cell** with a select grid like the ILAW tab; Option 1 is the default on export. The Flow is exported as bold-label bullets per strategy-model phase (5Ps, 7Es, 4As, and all other models).
-
-### 📝 Test Paper (HOTS–SOLO)
-Creates a multiple-choice test paper — usable as an examination, summative test, or quiz — with an answer key and a Table of Specifications (TOS).
-
-- Basis: a topic/competency you type, **or** an uploaded ILAW lesson plan file (**PDF, Word, or Excel**).
-- Every item is generated in **3 alternative versions** (v1.1.0); the teacher picks one version per question in a side-by-side grid — Version A is used wherever no choice is made.
-- Every item is tagged with a SOLO taxonomy level (Unistructural → Extended Abstract) and a Bloom's cognitive level, with selectable LOTS/MOTS/HOTS mixes.
-- The TOS lists learning competencies in teaching order — the earliest-taught lesson first (top of the TOS) down to the most recent — whether the basis is an uploaded BOW or typed competencies.
-- Exports one ZIP containing three DepEd-formatted Word files: **Examination** (Letter, Bookman Old Style), **Answer Key** (No./Ans. grid in tens), and **TOS** (A4 landscape with competency rows, teaching days, %, and item ranges per cognitive strand: Remembering/Understanding, Applying/Analyzing, Evaluating/Creating).
-
-All outputs are AI drafts: the teacher reviews every item and key before classroom use.
-
-### 🖥️ PowerPoint Generator (v1.1.0)
-Uploads an ILAW lesson plan (**PDF, Word, or Excel**) and builds **one deck per session** — a 5-session plan produces 5 separate .pptx files (with a ZIP download of them all):
-
-- The AI detects every session and its topic from the file, then designs each deck around that session only.
-- Every deck follows the canonical **16-part lesson flow**: Title → Learning Objectives → Motivation/Engage → Prior Knowledge → Lesson Introduction → Lesson Content (×3) → Example/Demonstration → Guided Activity → Application → Higher-Order Question → Assessment → Generalization → Assignment/Extension → Closing.
-- Slide count of **16 (exact flow), 15, 20, or 30**; other sizes keep every stage and merge/split only the Lesson Content slides.
-- Teacher name on the title slide; optional extra instructions to steer the deck (emphasis, activities, language keywords).
-- **Illustrated decks, still light**: every slide gets a real drawn picture (style-aware flat art rendered from the AI's `image_idea`) — whole decks stay around 0.5–1 MB, always under the 3 MB cap.
-
-## Teacher feedback (v1.1.0)
-The sidebar has a **💬 Feedback & suggestions** form (Name, Rating, Feedback, Suggestions). Every submission is **appended as a new row** to `feedback.xlsx` next to the app — existing rows are never edited. When the one-time Google Sheets webhook has been configured, the same row is **also inserted automatically into the owner's Google Sheet** — teachers enter nothing and need no URL of their own.
-
-### How the Google sync works (zero setup for everyone)
-Google blocks direct writes to a Sheet from a share link (a Google security rule), so the app posts each feedback row to the owner's **Google Form** (`forms.gle/TuTsZyb4n4AUvai57`), which accepts anonymous submissions and feeds the linked Google Sheet. The form ID and question entry IDs are baked into `app.py` (`_FEEDBACK_FORM_ID`, `_FEEDBACK_FORM_ENTRIES`). If the owner ever adds an Apps Script Web App URL (in `feedback_webhook.txt`, the `_FEEDBACK_WEBHOOK_URL` constant, or the `FEEDBACK_WEBHOOK_URL` environment variable), that webhook takes priority over the Form. Every submission is still saved locally to `feedback.xlsx` first, so nothing is lost when offline; the form message reports whether the Google send went through.
-
-## Install on another computer (one file)
-
-Copy **`ILAW_TeacherTools_Setup.bat`** to any folder on the other computer (USB drive, email, chat download — anything) and double-click it. That single file contains the whole system, and the installer will:
-
-1. Extract `app.py`, `requirements.txt`, the ILAW Excel template, icons, and launchers into that folder.
-2. Find or set up Python automatically. If Python is missing — or only the fake Microsoft Store "python" shortcut is present — the installer downloads a small helper and installs a private Python itself. No manual Python installation is required.
-3. Install all required Python packages (skipped when they are already present).
-4. Create an **"ILAW Teacher Tools"** desktop shortcut and offer to start the app.
-
-After that, opening the app is just the shortcut or `launch_ilaw.bat` — no other setup needed. Internet is required the first time (package install) and whenever generating plans or tests. An API key from any of the four providers (Gemini, OpenRouter, Groq, Mistral) is entered in the app's sidebar.
-
-## Run it locally (developer setup)
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+```bash
+git clone https://github.com/dodieko1991/deped-teacher-tools.git
+cd deped-teacher-tools
 pip install -r requirements.txt
-$env:GOOGLE_API_KEY = "your-google-ai-studio-key"
 streamlit run app.py
 ```
 
-You can also paste the key into the app's sidebar for the current browser session (any of the four providers). For deployment, set `GOOGLE_API_KEY` as a secret/environment variable to pre-fill the Gemini key; do not place keys in source files.
+---
+
+## 🔑 GET YOUR FREE AI KEY (one per provider — pick one to start)
+
+The app works the same with any of the four providers. Each has a **free tier**; when one quota runs out, switch provider in the sidebar and paste another key.
+
+| Provider | Get a key here | Free tier |
+|---|---|---|
+| **Google Gemini** (default) | https://aistudio.google.com/apikey | Daily quota, incl. web-search grounding |
+| **OpenRouter** | https://openrouter.ai/keys | Free models available |
+| **Groq** | https://console.groq.com/keys | Fast free tier |
+| **Mistral** | https://console.mistral.ai/api-keys | Free tier ("Experiment" plan) |
+
+**How to start:**
+1. Open the app → look at the **sidebar (AI Provider Hub)**.
+2. Pick your provider in the dropdown.
+3. Click the **"Get a … API key"** button — it opens the provider's key page.
+4. Sign in → **Create API key** → **Copy** it.
+5. Paste the key into the sidebar box. Optionally pick a **model** (Auto / Fast / Quality).
+6. Click **🔍 Test this key** to confirm it works.
+
+Keys stay in your browser session only — nothing is saved to disk.
+
+---
+
+## 📘 Tab 1 — ILAW Lesson Plan (BOW-first)
+
+1. **Upload your BOW** (PDF, Word, or Excel — the official DepEd Three-Term BOW).
+   The app instantly parses it: **all 3 terms, content standards, week rows (week range → lesson → competencies), and suggested activities.**
+2. **Grade level, Learning Area, and Lesson name auto-detect** from the BOW and lock.
+3. **Pick your week row** from the dropdown (e.g., *"Term 2 · Weeks 5 to 8 — Biodiversity"*) — the **Term auto-selects** from your pick. Term/Week are only typed manually when no BOW is uploaded.
+4. Choose sessions (1–5), duration, medium, strategy model, and optionally add your own extra instructions.
+5. **Generate** → the AI builds the plan **strictly from your BOW row** (never invents competencies), then a **second AI review pass** verifies every competency, objective, activity, assessment, and strategy against the source and removes anything unsupported.
+6. **Download the Excel** in the official weekly ILAW format — term/week filled in, every cell auto-sized so all text is visible.
+
+Without a BOW, the AI searches official DepEd sources instead — and if it cannot verify the lesson for your Grade + Subject + Term + Week, it **tells you instead of inventing one**.
+
+## 📗 Tab 2 — ILAW-LIL (Lesson Implementation Log)
+
+Upload a **Lesson Exemplar** (PDF/Word/Excel) → the AI reads it **thoroughly** and drafts the LIL in the official Excel format:
+
+- All sessions in **one file** — one column per session (C–G, up to 5).
+- **Yellow label cells and the reminder are never touched** — only the blank detail cells are filled.
+- Activity names, sequence, and content come **only from your exemplar**.
+- Dates/Time stay blank for you to fill in after each actual session.
+- Exports the exact `LESSON IMPLEMENTATION LOG TEMPLATE.xlsx` format.
+
+## 📝 Tab 3 — Test Paper (HOTS–SOLO)
+
+- Basis: a topic you type, **or** an uploaded ILAW lesson plan / exemplar.
+- Multiple choice with **HOTS–SOLO taxonomy levels**, adjustable **LOTS/MOTS/HOTS mix**, **up to 100 items**, **balanced option lengths** (no "longest answer is correct" giveaways), and a **shuffled answer key**.
+- Outputs **three documents**: the test paper, the **answer key**, and the **Table of Specifications (TOS)** — as Word/Excel downloads.
+- Each question comes with alternatives so you can review before exporting.
+
+## 🖥️ Tab 4 — PowerPoint Generator
+
+- Upload your ILAW/exemplar → the app detects the sessions; pick **one session** and a **slide count** (10/15/20/30) and **design theme** (Floral, Business, Education, Research, …).
+- The AI writes the content and picks fitting **images**; decks stay under ~3 MB.
+- Follows the DepEd flow: Title → Objectives → Motivation → Prior Knowledge → Content (with real paragraph meanings) → Example → Guided Activity → Application → HOTS question → Assessment → Generalization → Assignment → Closing.
+- **Optional: upload your own .pptx/.potx template** — the AI fills YOUR design with its content (slide size, colors, and layout are preserved).
+
+## 💬 Feedback
+
+The sidebar has a short feedback form (Name, Rating, Feedback, Suggestions) that submits straight to the developer's Google Form.
+
+---
+
+## 🧰 For developers
+
+- `app.py` — the whole app (single file, ~3,100 lines).
+- `work/test_*.py` — **17 offline test suites** (300+ checks). Run: `python work/test_bow.py` etc. (no server needed).
+- `work/rebuild_installer.py` — rebuilds `ILAW_TeacherTools_Setup.bat` after editing `app.py`: `py work/rebuild_installer.py`.
+- Version lives in `_APP_VERSION` at the top of `app.py` — bump it on every change; the sidebar, title, and installer all show it.
