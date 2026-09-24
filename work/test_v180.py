@@ -106,7 +106,7 @@ check("detected banner shown", "Detected from your exemplar" in lil_src)
 check("reuse: cached exemplar text reused at submit", "lil_exemplar_raw" in lil_src.split("if lil_submitted")[1][:2000])
 
 # ------------------------------------------------- version
-check("version: 1.9.2", app._APP_VERSION == "1.9.2", app._APP_VERSION)
+check("version: 2.0.0", app._APP_VERSION == "2.0.0", app._APP_VERSION)
 
 print()
 if failures:

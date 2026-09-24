@@ -54,17 +54,19 @@ Keys stay in your browser session only — nothing is saved to disk.
 
 ---
 
-## 📘 Tab 1 — ILAW Lesson Plan (BOW-first)
+## 📘 Tab 1 — ILAW Lesson Plan (built-in BOW library)
 
-1. **Upload your BOW** (PDF, Word, or Excel — the official DepEd Three-Term BOW).
-   The app instantly parses it: **all 3 terms, content standards, week rows (week range → lesson → competencies), and suggested activities.**
-2. **Grade level, Learning Area, and Lesson name auto-detect** from the BOW and lock.
-3. **Pick your week row** from the dropdown (e.g., *"Term 2 · Weeks 5 to 8 — Biodiversity"*) — the **Term auto-selects** from your pick. Term/Week are only typed manually when no BOW is uploaded.
-4. Choose sessions (1–5), duration, medium, strategy model, and optionally add your own extra instructions.
-5. **Generate** → the AI builds the plan **strictly from your BOW row** (never invents competencies), then a **second AI review pass** verifies every competency, objective, activity, assessment, and strategy against the source and removes anything unsupported.
-6. **Download the Excel** in the official weekly ILAW format — term/week filled in, every cell auto-sized so all text is visible.
+1. **Pick your Grade level and Subject** from the dropdowns — the app reads the official DepEd BOW library on your Desktop (`DepEd BOW Files`, parsed once and cached: Kindergarten, Grades 1–12, ~240 subjects).
+2. **Pick your lesson/topic** from the dropdown — every entry shows its **Term and Week** straight from the BOW (e.g., *"Term 2 · Week 5 to 6 — Origin of the Solar System"*). Grade 11/12 BOWs have no terms, so entries show *"Week 1 — topic"*; Senior High units and Kindergarten themes show the topic title.
+3. Learning Area, Term, and Lesson name **auto-fill and lock** from your pick.
+4. **The app decides the number of sessions for you** — the AI reads the topic's competencies and weekly time allotment and creates exactly the sessions the topic needs (1–5). You no longer choose it.
+5. Choose duration, medium, and strategy model; optionally add your own extra instructions.
+6. **Generate** → the AI builds the plan **strictly from your BOW topic**, then a **second AI review pass** verifies every competency, objective, activity, assessment, and strategy and removes anything unsupported.
+7. **Download the Excel** in the official weekly ILAW format — term/week filled in, every cell auto-sized so all text is visible.
 
-Without a BOW, the AI searches official DepEd sources instead — and if it cannot verify the lesson for your Grade + Subject + Term + Week, it **tells you instead of inventing one**.
+Can't find your subject or topic in the library? Expand **"Upload a BOW manually"** — an uploaded BOW drives the same flow.
+
+Without any BOW, the AI searches official DepEd sources instead — and if it cannot verify the lesson for your Grade + Subject + Term + Week, it **tells you instead of inventing one**.
 
 ## 📗 Tab 2 — ILAW-LIL (Lesson Implementation Log)
 

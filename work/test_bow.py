@@ -135,9 +135,9 @@ tab_decl = src.split("st.tabs(")[1][:200]
 check("order: ILAW first, LIL second", tab_decl.find("ILAW Lesson Plan") < tab_decl.find("ILAW-LIL"), tab_decl[:100])
 
 # ------------------------------------------------- lock behavior
-check("lock: bow_locked defined", "bow_locked = bool(" in src)
-check("lock: >=2 disabled fields", src.count("disabled=bow_locked") >= 2, str(src.count("disabled=bow_locked")))
-check("lock: BOW lesson feeds title", "ilaw_lesson_locked" in src)
+check("lock: topic lock defined", "topic_hit = topic_lookup.get(" in src)
+check("lock: >=2 disabled fields from BOW topic", src.count("disabled=bool(topic_hit)") >= 2, str(src.count("disabled=bool(topic_hit)")))
+check("lock: BOW lesson feeds title", "ilaw_title__" in src or "ilaw_lesson_locked" in src)
 check("lock: title prefilled from BOW row", "bow_title" in src)
 
 # ------------------------------------------------- prompt wiring
@@ -159,7 +159,7 @@ check("prompt: LIL keeps source-priority", "CURRICULUM SOURCE PRIORITY" in app.m
      "teacher": "T", "note": "", "exemplar": "EXEMPLAR BODY"}))
 
 # ------------------------------------------------- version
-check("version: 1.9.0", app._APP_VERSION == "1.9.2", app._APP_VERSION)
+check("version: 1.9.0", app._APP_VERSION == "2.0.0", app._APP_VERSION)
 
 print()
 if failures:

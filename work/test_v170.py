@@ -85,8 +85,8 @@ check("wire: term disabled with BOW", "disabled=bow_locked" in src.split("ilaw_t
 term_lines = src.splitlines()
 term_i = next(i for i, line in enumerate(term_lines) if 'key="ilaw_term"' in line)
 term_block = " ".join(term_lines[term_i:term_i + 4])
-check("wire: term auto index", "bow_term_index" in term_block, term_lines[term_i].strip()[:90])
-check("wire: bow_term_index from lookup", "week_lookup_for(bow_struct" in src)
+check("wire: term auto index", "bow_auto_term" in term_block, term_lines[term_i].strip()[:90])
+check("wire: term from library topic lookup", "bow_auto_term" in src and "topic_lookup" in src)
 
 # ---------------------------------------------------------------- Excel export
 details = {"area": "Science", "grade": "Grade 9 – Hydrogen", "teacher": "Jose Dennis P. Chua",
@@ -135,7 +135,7 @@ check("excel: declaration font >= 11", float(ws["B15"].font.size) >= 11.0, ws["B
 check("excel: references font >= 11", float(ws["B16"].font.size) >= 11.0, ws["B16"].font.size)
 
 # ---------------------------------------------------------------- version
-check("version: 1.9.0", app._APP_VERSION == "1.9.2", app._APP_VERSION)
+check("version: 1.9.0", app._APP_VERSION == "2.0.0", app._APP_VERSION)
 
 print()
 if failures:

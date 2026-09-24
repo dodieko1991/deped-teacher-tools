@@ -74,7 +74,7 @@ def check(name, cond, extra=""):
         fails.append(name)
 
 
-check("version 1.9.0", app._APP_VERSION == "1.9.2")
+check("version 1.9.0", app._APP_VERSION == "2.0.0")
 
 theme = {"bg": "FFF7FB", "accent": "C94F7C", "title": "4A1B3A", "text": "3B2B33"}
 for idea in ("big sun with three rays over green hills",

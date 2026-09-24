@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-_APP_VERSION = "1.9.2"  # bump this when shipping new updates
+_APP_VERSION = "2.0.0"  # bump this when shipping new updates
 from copy import copy
 from datetime import date, datetime
 from io import BytesIO
@@ -225,6 +225,7 @@ SCHEMA = {
         "extended_learning": "one string; outside-class extension only",
         "reflection": "one string; teacher reflection prompt only",
     }],
+    "session_count": "integer; the exact number of sessions you created in the sessions array",
 }
 
 
@@ -913,7 +914,9 @@ def parse_bow(raw_text):
     can fall back to using the raw upload text only.
     """
     raw = str(raw_text or "")
-    if "term" not in raw.lower() or not _BOW_WEEK_ROW_RE.search(raw):
+    # Term markers are optional: Grade 11/12 course BOWs carry week rows without
+    # any 'First/Second/Third Term' heading — those parse as one synthesized term.
+    if "term" not in raw.lower() and not _BOW_WEEK_ROW_RE.search(raw):
         return []
     norm = re.sub(r"===== PAGE \d+ =====", " ", raw)
     norm = re.sub(r"Page\s+\d+\s+of\s+\d+\s+Last\s+updated", " ", norm)
@@ -921,7 +924,9 @@ def parse_bow(raw_text):
     marks = sorted((m.start(), label) for label, pattern in _BOW_TERM_MARKERS
                    for m in re.finditer(pattern, norm, re.IGNORECASE))
     if not marks:
-        return []
+        if not _BOW_WEEK_ROW_RE.search(norm):
+            return []
+        marks = [(0, "Term 1")]  # week rows without term headings → one synthesized term
     terms = []
     for index, (start, label) in enumerate(marks):
         segment = norm[start + len(label): marks[index + 1][0] if index + 1 < len(marks) else len(norm)]
@@ -959,13 +964,16 @@ def _bow_area_grade(raw):
     """
     whole = str(raw or "")
     head = whole[:800]
+    if re.search(r"\bKindergarten\b", whole[:2000], re.IGNORECASE):
+        return "", "Kindergarten"
     grade_match = (re.search(r"Grade\s*[:\-]?\s*(\d{1,2})", head, re.IGNORECASE)
+                   or re.search(r"\bBaitang\s*[:\-]?\s*(\d{1,2})\b", whole, re.IGNORECASE)
                    or re.search(r"\bGrade\s*[:\-]?\s*(\d{1,2})\b", whole, re.IGNORECASE))
     grade = f"Grade {grade_match.group(1)}" if grade_match else ""
     area = next((candidate for candidate in _KNOWN_AREAS
                  if re.search(rf"\b{re.escape(candidate)}\b", head, re.IGNORECASE)), "")
     if not area:
-        pipe = re.search(r"\|\s*([A-Z][A-Za-z &]{2,40})", head)
+        pipe = re.search(r"[|,]\s*([A-Z][A-Za-z &]{2,40})", head)
         area = pipe.group(1).strip() if pipe else ""
     return area, grade
 
@@ -1096,7 +1104,8 @@ def summarize_bow(struct, term=None, week=None):
             lines.append(f"Performance Standard: {t['performance_standard']}")
         lines.append("Week rows (week range → lesson title → learning competencies):")
         for row in t["weeks"]:
-            lines.append(f"  • Weeks {row['weeks']}: {row['lesson']}")
+            prefix = f"Weeks {row['weeks']}: " if row.get("from") else ""
+            lines.append(f"  • {prefix}{row['lesson']}")
             lines.extend(f"      - {c}" for c in row["competencies"])
         if t["suggested_activities"]:
             lines.append("Suggested Activities:")
@@ -1106,6 +1115,233 @@ def summarize_bow(struct, term=None, week=None):
                      "range contains that week — when two ranges overlap, use the FIRST matching row in that term. "
                      "Never use week rows from other terms or other weeks.")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Built-in BOW library — the app scans the official DepEd BOW collection on the
+# teacher's Desktop (C:\Users\Administrator\Desktop\DepEd BOW Files\<Grade>\*.pdf)
+# so the ILAW tab can offer Grade → Subject → Topic dropdowns instead of a file
+# upload. Every file is parsed ONCE and cached on disk (JSON) plus in Streamlit's
+# cache, so reruns and restarts stay fast. Three document shapes are handled:
+#   A/B — week-row BOWs with or without 'First/Second/Third Term' headings
+#         (Kindergarten–Grade 10, Tech-Pro G12); the parser above handles both.
+#   S   — Senior High School course BOWs with numbered units and competencies
+#         but NO weeks and NO terms; units are extracted into topic rows.
+#   K   — Kindergarten theme BOWs (subthemes like '1. We are unique.'); topics
+#         carry no term and no week, exactly like the source document.
+# Files the extractor cannot read yet are still listed, with a warning, and the
+# teacher can always fall back to uploading that BOW manually.
+# ---------------------------------------------------------------------------
+BOW_LIBRARY_DIR = Path(os.environ.get("DEPED_BOW_LIBRARY", r"C:\Users\Administrator\Desktop\DepEd BOW Files"))
+BOW_LIBRARY_CACHE = Path(os.environ.get("DEPED_BOW_CACHE", str(Path(__file__).resolve().parent / "bow_library_cache.json")))
+GRADE_CHOICES = ["Kindergarten"] + [f"Grade {n}" for n in range(1, 13)]
+
+_SHS_UNIT_RE = re.compile(r"(\d{1,2})\.\s+((?:(?!\d{1,2}\.)[A-Z0-9(][^a-z]{0,3})?[A-Z][^•●|]{2,70}?)\s+(?=\d{1,2}\.\s+[a-z])")
+_SHS_AFTER_COMP_RE = re.compile(
+    r"(\d{1,2})\.\s+[^●\n]{5,240}?\s((?:[A-Z][A-Za-z'’()&,\-]*\s+){0,7}[A-Z][A-Za-z'’()&\-]*"
+    r"(?:\s+(?:of|and|the|in|for|to|a|an|on)\s+[A-Z][A-Za-z'’()&\-]*)*)\s*●")
+_KINDER_SUBTHEME_RE = re.compile(r"(\d{1,2})\.\s+((?:We|I|My|Our|How|What|Why|Where|When|Do|The|It)\b[^*●•]{2,90}?)[.\s](?=\s|$)")
+
+
+def extract_shs_topics(raw_text):
+    """Pull numbered unit/subtheme topics from a no-week SHS or Kindergarten BOW.
+
+    Returns rows shaped like parse_bow week rows ({weeks, from, to, lesson,
+    competencies}) but with from=0 meaning 'no weeks in this BOW'. Two unit-title
+    styles are tried: units printed BEFORE their competencies, then units printed
+    AFTER the last competency of the previous unit.
+    """
+    norm = re.sub(r"\s+", " ", str(raw_text or ""))
+    rows, seen = [], set()
+
+    def add(num, title):
+        title = re.sub(r"\s+", " ", title).strip(" .,;:*")
+        if num in seen or not (4 < len(title) < 90):
+            return
+        seen.add(num)
+        rows.append({"weeks": "", "from": 0, "to": 0, "lesson": title, "competencies": []})
+
+    for match in _SHS_UNIT_RE.finditer(norm):
+        add(int(match.group(1)), match.group(2))
+    for match in _SHS_AFTER_COMP_RE.finditer(norm):
+        add(int(match.group(1)), match.group(2))
+    if not rows:
+        # Last resort: Roman-numeral unit headings ('I. Citizenship in Practice')
+        # directly followed by numbered competencies.
+        for match in re.finditer(r"\b(XI{1,3}|IX|IV|VI{0,3}|V|I{1,3})\.\s+([A-Z][^●0-9\n]{4,60}?)\s*(?=\d{1,2}\.\s)", norm):
+            title = re.sub(r"\s+", " ", match.group(2)).strip(" .,;:-")
+            if 4 < len(title) < 80:
+                rows.append({"weeks": "", "from": 0, "to": 0, "lesson": title, "competencies": []})
+    if not rows and re.search(r"\bKindergarten\b", norm[:2000], re.IGNORECASE):
+        for match in _KINDER_SUBTHEME_RE.finditer(norm):
+            add(int(match.group(1)), match.group(2))
+    rows.sort(key=lambda r: r["lesson"].lower())
+    return rows
+
+
+_WEEK_TOPIC_RE = re.compile(r"(?<![\w.])(\d{1,2})(?![\w.])\s+(?=●)")
+
+
+def extract_week_topic_rows(raw_text):
+    """Week-numbered competency rows from Tech-Pro (Grade 12) BOWs.
+
+    Those documents are a 'Week | Learning Competency | Suggested Activities'
+    table with single week numbers ('1 ● Discuss animation fundamentals.') instead
+    of '1 to 2' ranges. Returns parse_bow-shaped rows so the same dropdown works.
+    """
+    norm = re.sub(r"\s+", " ", str(raw_text or ""))
+    if not re.search(r"Weeks?\s+Learning\s+Competenc", norm, re.IGNORECASE):
+        return []
+    hits = list(_WEEK_TOPIC_RE.finditer(norm))
+    rows, seen = [], set()
+    for index, match in enumerate(hits):
+        week = int(match.group(1))
+        if not 1 <= week <= 40 or week in seen:
+            continue
+        body = norm[match.end(): hits[index + 1].start() if index + 1 < len(hits) else len(norm)]
+        bullets = [b.strip() for b in re.split(r"●", body) if len(b.strip()) > 15]
+        if not bullets:
+            continue
+        seen.add(week)
+        rows.append({"weeks": str(week), "from": week, "to": week, "lesson": bullets[0][:110].strip(" .,;"), "competencies": []})
+    return rows
+
+
+def topic_label(term_name, row):
+    """Dropdown label for one BOW row: 'Term X · Week Y — Lesson' (parts optional)."""
+    parts = [p for p in (str(term_name or "").strip(), f"Week {row['weeks']}" if row.get("from") else "") if p]
+    head = " · ".join(parts)
+    return f"{head} — {row['lesson'][:70]}" if head else row["lesson"][:70]
+
+
+def _scan_bow_library():
+    """Scan the Desktop BOW folder once and parse every PDF found. Slow path."""
+    library = {}
+    if not BOW_LIBRARY_DIR.is_dir():
+        return library
+    for path in sorted(BOW_LIBRARY_DIR.rglob("*.pdf")):
+        grade = path.parent.name.strip()
+        if grade not in GRADE_CHOICES:
+            continue
+        subject = re.sub(r"^\[[^\]]+\]\s*", "", path.stem)
+        subject = re.sub(r"^Updated as of [\d.]+_", "", subject)
+        subject = re.sub(r"\s+", " ", subject).strip()
+        if not subject:
+            continue
+        try:
+            reader = PdfReader(str(path))
+            raw = "\n".join(page.extract_text() or "" for page in reader.pages)
+        except Exception:
+            continue
+        if not raw.strip():
+            continue
+        area_hint, grade_hint = _bow_area_grade(raw)
+        terms = parse_bow(raw)
+        if not terms or not any(t["weeks"] for t in terms):
+            # Either nothing parsed, or term headers were found without week rows
+            # (Kindergarten themes, SHS units) — try the topic extractors instead.
+            topics = extract_shs_topics(raw)
+            if not topics:
+                topics = extract_week_topic_rows(raw)
+            if topics:
+                terms = [{"term": "", "content_standards": [], "performance_standard": "", "weeks": topics, "suggested_activities": []}]
+            elif not terms:
+                terms = [{"term": "", "content_standards": [], "performance_standard": "", "weeks": [], "suggested_activities": []}]
+        library.setdefault(grade, {})[subject] = {"terms": terms, "area": area_hint or subject, "grade": grade_hint or grade}
+    return library
+
+
+def _library_cached(cache_bytes):
+    """Decode one disk-cache payload; returns {'library': {...}}."""
+    try:
+        return json.loads(cache_bytes.decode("utf-8"))
+    except Exception:
+        return {"library": {}}
+
+
+def load_bow_library():
+    """Return the parsed BOW library {grade: {subject: {terms, area, grade}}}.
+
+    A JSON disk cache sits next to app.py so teachers don't re-parse ~300 PDFs on
+    every launch. A freshly written cache (<60s old) is trusted without re-scanning
+    the PDF mtimes, keeping warm starts fast; older caches are revalidated against
+    the newest PDF before reuse. The newest-PDF stamp is memoized per session, and
+    decoded payloads are memoized in st.session_state as well. The cache is only
+    ever written from a real scan of BOW_LIBRARY_DIR, never from a foreign payload.
+    """
+    stamp = st.session_state.get("_bow_library_stamp")
+    if stamp is None:
+        try:
+            stamps = [p.stat().st_mtime for p in BOW_LIBRARY_DIR.rglob("*.pdf")] if BOW_LIBRARY_DIR.is_dir() else []
+            stamp = max(stamps) if stamps else 0.0
+        except OSError:
+            stamp = 0.0
+        st.session_state["_bow_library_stamp"] = stamp
+    cache_bytes = b""
+    try:
+        cache_mtime = BOW_LIBRARY_CACHE.stat().st_mtime if BOW_LIBRARY_CACHE.exists() else 0.0
+    except OSError:
+        cache_mtime = 0.0
+    if cache_mtime and time.time() - cache_mtime < 60.0:
+        try:
+            cache_bytes = BOW_LIBRARY_CACHE.read_bytes()
+        except Exception:
+            cache_bytes = b""
+    elif BOW_LIBRARY_CACHE.exists():
+        try:
+            data = json.loads(BOW_LIBRARY_CACHE.read_text(encoding="utf-8"))
+            if abs(float(data.get("stamp", 0)) - stamp) < 1.0:
+                cache_bytes = BOW_LIBRARY_CACHE.read_bytes()
+        except Exception:
+            cache_bytes = b""
+    if not cache_bytes:
+        library = _scan_bow_library()
+        if BOW_LIBRARY_DIR.is_dir():
+            try:
+                BOW_LIBRARY_CACHE.write_text(json.dumps({"stamp": stamp, "library": library}, ensure_ascii=False), encoding="utf-8")
+            except OSError:
+                pass
+        st.session_state["_bow_library_decoded"] = {"library": library}
+        return library
+    payload = st.session_state.get("_bow_library_decoded")
+    if payload is None:
+        payload = _library_cached(cache_bytes)
+        st.session_state["_bow_library_decoded"] = payload
+    library = payload.get("library") if isinstance(payload, dict) else None
+    return library if isinstance(library, dict) else {}
+
+
+def library_bow_text(grade, subject):
+    """Full cached PDF text for one library subject — the AI's raw BOW basis."""
+    folder = BOW_LIBRARY_DIR / grade
+    if not folder.is_dir():
+        return ""
+    for path in folder.glob("*.pdf"):
+        stem = re.sub(r"^\[[^\]]+\]\s*", "", path.stem)
+        stem = re.sub(r"^Updated as of [\d.]+_", "", stem)
+        if re.sub(r"\s+", " ", stem).strip() == subject:
+            try:
+                reader = PdfReader(str(path))
+                return "\n".join(page.extract_text() or "" for page in reader.pages)[:60000]
+            except Exception:
+                return ""
+    return ""
+
+
+def plan_session_count(details, plan):
+    """Let the AI decide how many sessions the topic needs.
+
+    When details['sessions'] is falsy (BOW-library flow), the number written by the
+    model into SCHEMA's session_count field is used; it is clamped to 1–5 (the ILAW
+    template's slot width) and always falls back to a sane default.
+    """
+    if details.get("sessions"):
+        return max(1, min(5, int(details["sessions"])))
+    try:
+        declared = int(plan.get("session_count") or 0)
+    except (TypeError, ValueError):
+        declared = 0
+    return max(1, min(5, declared or 2))
 
 
 @st.cache_data
@@ -1126,13 +1362,25 @@ def _strategy_phases(strategy):
     return [p.strip() for p in tail.split(",") if p.strip()]
 
 
+def _session_rule(sessions):
+    """Prompt paragraph for the session count: fixed count when given, AI decides when not."""
+    try:
+        sessions = int(sessions or 0)
+    except (TypeError, ValueError):
+        sessions = 0
+    if sessions:
+        return (f"Create exactly {sessions} learner-centered sessions — no fewer, no more: the \"sessions\" array in your JSON must "
+                f"contain exactly {sessions} objects, numbered \"Session 1\" to \"Session {sessions}\" in teaching order;")
+    return ("You are ALSO the pacing expert: decide yourself how many sessions the selected topic needs — the topic's "
+            "competencies, the BOW's week span, and the time allotment are your guide, and the teacher does not choose the "
+            "session count. Record the number you decide in session_count and create exactly that many session objects;")
+
+
 def make_prompt(d):
     return f"""You are an expert Philippine DepEd teacher creating a DRAFT weekly ILAW lesson plan.
 ILAW means Intentions, Learning Experiences, Assessing Learning, and Ways Forward.
 Use the supplied competency source as the basis for learning competencies and pacing. Do not invent
-competency codes or claim DepEd approval. Create exactly {d['sessions']} learner-centered sessions —
-no fewer, no more: the "sessions" array in your JSON must contain exactly {d['sessions']} objects,
-numbered "Session 1" to "Session {d['sessions']}" in teaching order; their activity times should fit
+competency codes or claim DepEd approval. {_session_rule(d.get('sessions'))} their activity times should fit
 approximately {d['duration']} each. Use {d['medium']}.
 {CURRICULUM_SOURCE_PRIORITY}
 {STRICT_CURRICULUM_VERIFICATION}
@@ -2469,7 +2717,7 @@ def generate(api_key, details):
         {"response_mime_type": "application/json", "temperature": 0.35},
     )
     _raise_if_curriculum_refusal(plan)
-    expected = int(details.get("sessions") or len(_sessions_from_plan(plan)) or 1)
+    expected = plan_session_count(details, plan)
     plan = _enforce_session_count(plan, expected, make_prompt(details) + (
         f"\nCRITICAL: your previous answer had the wrong number of session objects. Return ONLY the "
         f"JSON schema with exactly {expected} session objects, numbered Session 1 to Session {expected}.\n"))
@@ -2914,83 +3162,97 @@ with st.sidebar:
 lesson_tab, lil_tab, test_tab, ppt_tab = st.tabs(["📘 ILAW Lesson Plan", "📗 ILAW-LIL (Implementation Log)", "📝 Test Paper Generator", "🖥️ PowerPoint Generator"])
 
 with lesson_tab:
-    st.caption("Step 1 — upload your BOW. The app reads the terms, week rows, competencies, standards, and activities, "
-               "then fills Learning Area and Lesson name for you. Step 2 — pick the Term, Week, and Teaching Strategy.")
+    st.caption("Step 1 — pick your Grade level, Subject, and lesson topic from the built-in BOW library on the Desktop "
+               "(DepEd BOW Files). Step 2 — pick a Teaching Strategy; the app itself decides how many sessions the topic needs.")
 
-    # --- STEP 1: BOW upload comes FIRST and feeds everything below it. ---
-    st.subheader("1 · Budget of Work (BOW)")
-    bow_file = st.file_uploader("Upload BOW — PDF, Word, or Excel", type=["pdf", "docx", "xlsx", "xlsm", "xls"],
-                                key="ilaw_bow",
-                                help="The official DepEd Three-Term Budget of Work. It is parsed into terms, week rows, "
-                                     "competencies, standards, and suggested activities — the AI's primary source.")
-    bow_struct, bow_area_hint, bow_grade_hint = [], "", ""
+    # --- STEP 1: choose the lesson from the built-in BOW library (Grade → Subject → Topic). ---
+    st.subheader("1 · Choose your lesson (built-in BOW library)")
+    lib = load_bow_library()
+    grade_choices = [g for g in GRADE_CHOICES if g in lib] or GRADE_CHOICES
+    bow_sel_grade = st.selectbox("Grade level *", grade_choices, key="ilaw_lib_grade",
+                                 help="Every grade folder found in the BOW library on your Desktop.")
+    subject_options = sorted(lib.get(bow_sel_grade, {}))
+    bow_sel_subject = st.selectbox("Subject *", subject_options, key="ilaw_lib_subject", index=None,
+                                   placeholder="Select subject" if subject_options else "No BOW files found for this grade",
+                                   disabled=not subject_options,
+                                   help="Subjects available in the library for the selected grade.")
+    topic_options, topic_lookup, term_locked, bow_auto_term = [], {}, False, ""
+    if bow_sel_subject:
+        for t_index, t in enumerate(lib[bow_sel_grade][bow_sel_subject]["terms"], start=1):
+            if str(t.get("term", "")).strip():
+                term_locked = False
+                bow_auto_term = bow_auto_term or t["term"]
+            for row in t["weeks"]:
+                label = topic_label(t.get("term"), row)
+                topic_options.append(label)
+                topic_lookup[label] = (t_index, t, row)
+        if topic_options and term_locked:
+            bow_auto_term = bow_auto_term or "Term 1"
+    bow_sel_topic = st.selectbox("Lesson / topic *", topic_options, key="ilaw_lib_topic", index=None,
+                                 placeholder="Select lesson / topic" if topic_options else
+                                             ("No topics could be listed from this BOW — use the upload below" if bow_sel_subject else "Select a subject first"),
+                                 disabled=not topic_options,
+                                 help="Week rows (or SHS units) from the BOW. The label shows the Term and Week when the BOW has them.")
+    if bow_sel_subject and not topic_options:
+        st.warning("This BOW has no week rows or numbered units the app can list yet. Pick another subject, "
+                   "or upload that BOW manually in the uploader below — its full text is still used by the AI.")
+    bow_file = None
+    with st.expander("📄 Can't find your subject or topic? Upload a BOW manually"):
+        bow_file = st.file_uploader("Upload BOW — PDF, Word, or Excel", type=["pdf", "docx", "xlsx", "xlsm", "xls"],
+                                    key="ilaw_bow",
+                                    help="The official DepEd Budget of Work. Parsed into terms, week rows, "
+                                         "competencies, standards, and suggested activities.")
+    bow_struct, bow_area_hint = [], ""
     if bow_file:
         try:
             bow_raw = read_document_cached(bow_file.name, bow_file.getvalue())
             bow_struct = parse_bow(bow_raw)
             st.session_state["ilaw_bow_raw"] = bow_raw
-            bow_area_hint, bow_grade_hint = _bow_area_grade(bow_raw)
+            bow_area_hint, _g = _bow_area_grade(bow_raw)
+            topic_options, topic_lookup, term_locked, bow_auto_term = [], {}, bool(bow_struct), ""
+            for t_index, t in enumerate(bow_struct, start=1):
+                if str(t.get("term", "")).strip():
+                    term_locked = False
+                    bow_auto_term = bow_auto_term or t["term"]
+                for row in t["weeks"]:
+                    label = topic_label(t.get("term"), row)
+                    topic_options.append(label)
+                    topic_lookup[label] = (t_index, t, row)
             if bow_struct:
+                term_locked = term_locked or not any(str(t.get("term", "")).strip() for t in bow_struct)
+                bow_auto_term = bow_auto_term or "Term 1"
                 total_rows = sum(len(t["weeks"]) for t in bow_struct)
-                st.success(f"BOW parsed: {len(bow_struct)} term(s), {total_rows} week row(s), "
-                           f"{sum(len(t['suggested_activities']) for t in bow_struct)} suggested activities.")
-                with st.expander("See what the app read from your BOW"):
-                    for t in bow_struct:
-                        rows = " · ".join(f"Wk {r['weeks']}: {r['lesson']}" for r in t["weeks"][:12])
-                        st.markdown(f"**{t['term']}** — {len(t['content_standards'])} content standard(s); week rows: {rows or 'none detected'}")
-            else:
-                st.info("This file was read but no official Three-Term BOW structure (First/Second/Third Term with week rows) "
-                        "was detected. The full text will still be sent to the AI as the basis.")
+                st.success(f"BOW parsed: {len(bow_struct)} term(s), {total_rows} week row(s).")
         except Exception as exc:
             st.error(f"Could not read the BOW file: {exc}")
             bow_struct = []
-    else:
-        st.info("No BOW uploaded yet — the AI will search public DepEd sources and produce a provisional draft. "
-                "Upload a BOW for the most accurate lesson.")
+    elif not lib:
+        st.info("The BOW library folder was not found on the Desktop — upload a BOW above to continue.")
 
-    # --- STEP 2: lesson details. Learning Area + Lesson name lock when a BOW is present. ---
-    bow_locked = bool(bow_struct)
-    week_lookup = {}
-    bow_term_index = None
-    if bow_struct:
-        hit = week_lookup_for(bow_struct, st.session_state.get("ilaw_week_bow"))
-        bow_term_index = hit[0] if hit else None
+    # --- STEP 2: lesson details. The library locks area/grade/lesson/term; the AI decides the session count. ---
+    topic_hit = topic_lookup.get(bow_sel_topic) if bow_sel_topic else None
     with st.form("ilaw_form"):
         st.subheader("2 · Lesson details")
         left, right = st.columns(2)
         with left:
-            area = st.text_input("Learning area / subject *", placeholder="e.g., Science",
-                                 value=bow_area_hint or "", disabled=bow_locked,
-                                 help="Filled automatically from the uploaded BOW." if bow_locked else None)
-            grade = st.text_input("Grade level and section *", placeholder="e.g., Grade 9 – Hydrogen",
-                                  value=bow_grade_hint or "", key="ilaw_grade")
-            if bow_struct:
-                week_options = []
-                for t_index, t in enumerate(bow_struct, start=1):
-                    for row in t["weeks"]:
-                        label = f"{t['term']} · Week {row['weeks']} — {row['lesson'][:60]}"
-                        week_options.append(label)
-                        week_lookup[label] = (t_index, t, row)
-                week = st.selectbox("Week (from your BOW) *", week_options, key="ilaw_week_bow",
-                                    help="Every week row found in the BOW. The matching lesson title and "
-                                         "competencies are used verbatim.")
-            else:
-                week = st.text_input("Week *", placeholder="e.g., Week 3", key="ilaw_week_text")
+            area = st.text_input("Learning area / subject *",
+                                 value=(bow_area_hint or (lib.get(bow_sel_grade, {}).get(bow_sel_subject, {}).get("area") if bow_sel_subject else "") or ""),
+                                 disabled=bool(topic_hit), key=f"ilaw_area__{bow_sel_grade}__{bow_sel_subject or 'none'}",
+                                 help="Filled automatically from the BOW." if topic_hit else None,
+                                 placeholder="e.g., Science")
+            grade = st.text_input("Grade level and section *", value=bow_sel_grade or "",
+                                  placeholder="e.g., Grade 9 – Hydrogen (add your section)", key=f"ilaw_grade__{bow_sel_grade or 'none'}")
             term = st.selectbox("Term", ["Term 1", "Term 2", "Term 3"], key="ilaw_term",
-                                disabled=bow_locked,
-                                index=(bow_term_index - 1) if bow_locked and bow_term_index else None,
-                                help="Auto-selected from your BOW week row." if bow_locked else None)
+                                disabled=term_locked or bool(topic_hit),
+                                index={"Term 1": 0, "Term 2": 1, "Term 3": 2}.get(bow_auto_term),
+                                help="Auto-selected from the BOW." if (topic_hit or term_locked) else None)
             strategy = st.selectbox("Teaching Strategy Model *", TEACHING_STRATEGIES, index=None, placeholder="Select a required model", key="ilaw_strategy")
         with right:
-            auto_title = ""
-            if bow_struct:
-                hit = week_lookup.get(week)
-                auto_title = hit[2]["lesson"] if hit else (bow_struct[0]["weeks"][0]["lesson"] if bow_struct[0]["weeks"] else "")
-            title = st.text_input("Name of lesson", value=auto_title, disabled=bow_locked,
-                                  key="ilaw_lesson_locked",
-                                  placeholder="Auto-filled from the BOW week row",
-                                  help="Filled automatically from the matching BOW week row." if bow_locked else None)
-            sessions = st.selectbox("Number of sessions", [1, 2, 3, 4, 5], key="ilaw_sessions")
+            title = st.text_input("Name of lesson", value=(topic_hit[2]["lesson"] if topic_hit else ""),
+                                  disabled=bool(topic_hit), key=f"ilaw_title__{bow_sel_topic or 'manual'}",
+                                  placeholder="Auto-filled from the BOW topic",
+                                  help="Filled automatically from the selected BOW topic." if topic_hit else None)
+            st.caption("🔢 The number of sessions is decided by the AI from the topic's competencies and weekly time allotment — you no longer choose it.")
             duration = st.selectbox("Duration per session", ["40 minutes", "50 minutes", "60 minutes"], key="ilaw_duration")
             medium = st.selectbox("Medium of instruction", ["English", "Filipino", "Cebuano", "Mother tongue / local language", "Mixed"], key="ilaw_medium")
         teacher = st.text_input("Teachers Name (optional)", key="ilaw_teacher")
@@ -2999,7 +3261,10 @@ with lesson_tab:
         submitted = st.form_submit_button("Generate ILAW lesson plan", type="primary", use_container_width=True)
 
     if submitted:
-        missing = [label for label, value in {"Learning area": area, "Grade level and section": grade, "Week": week, "Teaching Strategy Model": strategy}.items() if not value or not str(value).strip()]
+        required = {"Learning area": area, "Grade level and section": grade, "Teaching Strategy Model": strategy}
+        if not topic_hit and not (bow_file and str(title or "").strip()):
+            required["Lesson / topic"] = bow_sel_topic
+        missing = [label for label, value in required.items() if not value or not str(value).strip()]
         if missing:
             st.error("Please complete: " + ", ".join(missing))
         elif not api_key.strip():
@@ -3007,19 +3272,23 @@ with lesson_tab:
         else:
             try:
                 with st.spinner("Reading the BOW and creating your ILAW lesson plan..."):
-                    bow_text = ""
-                    if bow_file:
+                    if topic_hit:
+                        bow_struct = lib[bow_sel_grade][bow_sel_subject]["terms"]
+                        bow_text = library_bow_text(bow_sel_grade, bow_sel_subject)
+                        bow_filename = f"{bow_sel_grade}\\{bow_sel_subject}"
+                    elif bow_file:
                         bow_text = st.session_state.get("ilaw_bow_raw") or read_document_cached(bow_file.name, bow_file.getvalue())
-                    bow_title = ""
-                    if bow_struct:
-                        hit = week_lookup.get(week)
-                        if hit:
-                            bow_title = hit[2]["lesson"]
-                            week = f"Week {hit[2]['from']}"
-                            term = hit[1]["term"]
+                        bow_filename = bow_file.name
+                    else:
+                        bow_text, bow_filename = "", ""
+                    bow_title = topic_hit[2]["lesson"] if topic_hit else str(title or "").strip()
+                    week = f"Week {topic_hit[2]['from']}" if topic_hit and topic_hit[2].get("from") else "Week 1"
+                    # The topic's own term wins (multi-term BOWs); synthesized "Term 1"
+                    # applies to no-term BOWs; otherwise keep the teacher's choice.
+                    term = (topic_hit[1].get("term") if topic_hit else "") or bow_auto_term or str(term or "").strip()
                     # No explicit Term from the source? Infer it from the week number:
                     # Weeks 1–12 → Term 1, 13–24 → Term 2, 25–36 → Term 3.
-                    if not bow_struct:
+                    if not str(term or "").strip():
                         week_num_match = re.search(r"\d{1,2}", str(week or ""))
                         derived = term_for_week(week_num_match.group(0)) if week_num_match else ""
                         if derived:
@@ -3027,10 +3296,10 @@ with lesson_tab:
                                     "(Weeks 1–12 → Term 1, 13–24 → Term 2, 25–36 → Term 3).")
                             term = derived
                     details = {"area": area, "grade": grade, "term": term, "week": week, "strategy": strategy,
-                               "title": bow_title or title, "sessions": sessions, "duration": duration, "medium": medium,
+                               "title": bow_title, "sessions": 0, "duration": duration, "medium": medium,
                                "teacher": teacher, "context": context, "note": note.strip(),
                                "bow": (summarize_bow(bow_struct, term, week) + "\n\nRAW BOW TEXT:\n" + bow_text) if bow_struct else bow_text,
-                               "bow_filename": bow_file.name if bow_file else "",
+                               "bow_filename": bow_filename,
                                "bow_match": match_bow_row(bow_struct, term, week)}
                     st.session_state.plan, st.session_state.details = generate(api_key, details), details
             except Exception as exc:
