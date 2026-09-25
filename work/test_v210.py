@@ -129,7 +129,7 @@ check("3. env override beats container", str(m3.BOW_LIBRARY_DIR) == r"C:\env\win
 lib = m2.load_bow_library()
 subjects = sum(len(s) for s in lib.values())
 check("4a. seed fallback works with container", subjects == 241, f"subjects={subjects}")
-check("4b. version is 2.1.0", m2._APP_VERSION == "2.1.0", m2._APP_VERSION)
+check("4b. version is 2.1.0", m2._APP_VERSION == "2.2.0", m2._APP_VERSION)
 check("4c. resolve helper exists and is callable", callable(m2.resolve_bow_library_dir), "")
 texts = sum(1 for g in lib.values() for s in g.values() if s.get("text"))
 check("4d. seed texts available for text fallback", texts == 241, f"texts={texts}")

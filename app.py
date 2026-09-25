@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-_APP_VERSION = "2.1.0"  # bump this when shipping new updates
+_APP_VERSION = "2.2.0"  # bump this when shipping new updates
 from copy import copy
 from datetime import date, datetime
 from io import BytesIO
@@ -1077,20 +1077,39 @@ def week_lookup_for(struct, label):
 
 
 def match_bow_row(struct, term, week):
-    """Prompt hint naming the BOW week row that matches the teacher's Term + Week.
-    Overlapping ranges resolve to the FIRST matching row in the selected term."""
-    week_number = re.search(r"\d{1,2}", str(week or ""))
-    if not week_number or not struct:
+    """Prompt hint naming the BOW row that matches the teacher's Term + Week.
+
+    Overlapping ranges resolve to the FIRST matching row in the selected term.
+    When the BOW has no week numbers at all (SHS course and Kindergarten BOWs),
+    the row is matched by lesson title instead — never claim a week that the
+    source does not have.
+    """
+    if not struct:
         return ""
-    week_num = int(week_number.group(0))
+    week_number = re.search(r"\d{1,2}", str(week or ""))
     wanted = str(term or "").strip().lower()
     candidates = [t for t in struct if str(t["term"]).lower() == wanted] or list(struct)
-    for t in candidates:
-        for row in t["weeks"]:
-            if row["from"] <= week_num <= row["to"]:
-                return (f"\nBOW MATCH — the teacher selected {t['term']}, Week {week_num}. The matching Budget of Work row is "
-                        f"'Weeks {row['weeks']}: {row['lesson']}'. Use THIS row's lesson title and learning competencies "
-                        f"(first matching row when ranges overlap); do not use rows from other terms or weeks.")
+    if week_number:
+        week_num = int(week_number.group(0))
+        for t in candidates:
+            for row in t["weeks"]:
+                if row["from"] <= week_num <= row["to"]:
+                    return (f"\nBOW MATCH — the teacher selected {t['term']}, Week {week_num}. The matching Budget of Work row is "
+                            f"'Weeks {row['weeks']}: {row['lesson']}'. Use THIS row's lesson title and learning competencies "
+                            f"(first matching row when ranges overlap); do not use rows from other terms or weeks.")
+        return ""
+    # No week in this course — match the topic row by title.
+    title = re.sub(r"\s+", " ", str(struct[0].get("_selected_topic") or "")).strip().lower() if isinstance(struct, list) else ""
+    rows = [row for t in candidates for row in t["weeks"]]
+    target = next((row for row in rows if re.sub(r"\s+", " ", row["lesson"]).strip().lower() == title), None)
+    if target is not None:
+        return (f"\nBOW MATCH — the teacher selected the '{target['lesson']}' unit from this course's Budget of Work "
+                "(units with no week numbers — one unit is taught after another). Use THIS unit's lesson title and "
+                "learning competencies; do not use other units. Do NOT claim a specific week — the source has none.")
+    if rows and all(not row.get("from") for row in rows):
+        return ("\nBOW MATCH — this course's Budget of Work lists topics as UNITS with no week numbers "
+                "(one unit is taught after another). The teacher selected the topic from that list; ground the plan "
+                "in the selected unit's learning competencies below. Do NOT claim a specific week — the source has none.")
     return ""
 
 
@@ -1098,16 +1117,22 @@ def summarize_bow(struct, term=None, week=None):
     """Render the parsed BOW as an explicit, AI-ready summary block."""
     lines = ["PARSED BOW SUMMARY (machine-extracted from the uploaded Budget of Work — authoritative for terms, standards, week rows, competencies, and activities):"]
     for t in struct:
-        lines.append(f"\n=== {t['term'].upper()} ===")
+        lines.append(f"\n=== {(t['term'] or 'Course topics').upper()} ===")
         if t["content_standards"]:
             lines.append("Content Standards:")
             lines.extend(f"  • {c}" for c in t["content_standards"])
         if t["performance_standard"]:
             lines.append(f"Performance Standard: {t['performance_standard']}")
-        lines.append("Week rows (week range → lesson title → learning competencies):")
+        weeked = [row for row in t["weeks"] if row.get("from")]
+        if weeked:
+            lines.append("Week rows (week range → lesson title → learning competencies):")
         for row in t["weeks"]:
-            prefix = f"Weeks {row['weeks']}: " if row.get("from") else ""
-            lines.append(f"  • {prefix}{row['lesson']}")
+            if row.get("from"):
+                lines.append(f"  • Weeks {row['weeks']}: {row['lesson']}")
+            elif row.get("competencies"):
+                lines.append(f"  • {row['lesson']} — Unit learning competency (no weeks in this course):")
+            else:
+                lines.append(f"  • {row['lesson']}")
             lines.extend(f"      - {c}" for c in row["competencies"])
         if t["suggested_activities"]:
             lines.append("Suggested Activities:")
@@ -1168,29 +1193,58 @@ def extract_shs_topics(raw_text):
     Returns rows shaped like parse_bow week rows ({weeks, from, to, lesson,
     competencies}) but with from=0 meaning 'no weeks in this BOW'. Two unit-title
     styles are tried: units printed BEFORE their competencies, then units printed
-    AFTER the last competency of the previous unit.
+    AFTER the last competency of the previous unit. The numbered competencies that
+    follow each unit title are attached to that unit's row — the AI needs them.
     """
     norm = re.sub(r"\s+", " ", str(raw_text or ""))
     rows, seen = [], set()
 
-    def add(num, title):
+    def _numbered_comps(segment):
+        """'1. do X 2. prove Y' → ['1. do X', '2. prove Y'] (cleaned, len>25)."""
+        # Stop at the next document-section header — the last unit's segment can
+        # run past the competencies into the next 'CONTENT DOMAIN …' block.
+        segment = re.split(r"\d{1,2}\s+CONTENT\s+DOMAIN|CONTENT\s+STANDARD|PERFORMANCE\s+STANDARD|LEARNING\s+COMPETENC|Suggested\s+Activities",
+                           str(segment or ""), maxsplit=1, flags=re.IGNORECASE)[0]
+        comps = []
+        pieces = re.split(r"(?:^|\s)(\d{1,2})\.\s+", " " + str(segment).strip())
+        for index in range(1, len(pieces) - 1, 2):
+            number, text = int(pieces[index]), _clean_bow_phrase(pieces[index + 1])
+            if len(text) > 25:
+                comps.append(text if text.startswith(f"{number}.") else f"{number}. {text}")
+        return comps
+
+    def add(num, title, segment=""):
         title = re.sub(r"\s+", " ", title).strip(" .,;:*")
         if num in seen or not (4 < len(title) < 90):
             return
         seen.add(num)
-        rows.append({"weeks": "", "from": 0, "to": 0, "lesson": title, "competencies": []})
+        rows.append({"weeks": "", "from": 0, "to": 0, "lesson": title,
+                     "competencies": _numbered_comps(segment)[:8]})
 
-    for match in _SHS_UNIT_RE.finditer(norm):
-        add(int(match.group(1)), match.group(2))
-    for match in _SHS_AFTER_COMP_RE.finditer(norm):
-        add(int(match.group(1)), match.group(2))
+    matches = list(_SHS_UNIT_RE.finditer(norm))
+    for index, match in enumerate(matches):
+        segment = norm[match.end(): matches[index + 1].start() if index + 1 < len(matches) else len(norm)]
+        add(int(match.group(1)), match.group(2), segment)
+    if not rows:
+        matches = list(_SHS_AFTER_COMP_RE.finditer(norm))
+        for index, match in enumerate(matches):
+            # Units printed after their competencies: the segment from this unit's
+            # competency to the next one carries the full competency text; strip
+            # the trailing unit title so it is not counted into the competency.
+            title = re.sub(r"\s+", " ", match.group(2)).strip()
+            segment = norm[match.start(): matches[index + 1].start() if index + 1 < len(matches) else len(norm)]
+            body = segment.rsplit(title, 1)[0] if title and title in segment else segment
+            add(int(match.group(1)), title, body)
     if not rows:
         # Last resort: Roman-numeral unit headings ('I. Citizenship in Practice')
         # directly followed by numbered competencies.
-        for match in re.finditer(r"\b(XI{1,3}|IX|IV|VI{0,3}|V|I{1,3})\.\s+([A-Z][^●0-9\n]{4,60}?)\s*(?=\d{1,2}\.\s)", norm):
+        roman_matches = list(re.finditer(r"\b(XI{1,3}|IX|IV|VI{0,3}|V|I{1,3})\.\s+([A-Z][^●0-9\n]{4,60}?)\s*(?=\d{1,2}\.\s)", norm))
+        for index, match in enumerate(roman_matches):
             title = re.sub(r"\s+", " ", match.group(2)).strip(" .,;:-")
-            if 4 < len(title) < 80:
-                rows.append({"weeks": "", "from": 0, "to": 0, "lesson": title, "competencies": []})
+            if not (4 < len(title) < 80):
+                continue
+            segment = norm[match.end(): roman_matches[index + 1].start() if index + 1 < len(roman_matches) else len(norm)]
+            add(match.group(1), title, segment)
     if not rows and re.search(r"\bKindergarten\b", norm[:2000], re.IGNORECASE):
         for match in _KINDER_SUBTHEME_RE.finditer(norm):
             add(int(match.group(1)), match.group(2))
@@ -1486,7 +1540,7 @@ SOURCE FIDELITY — before writing anything, review the plan against the source:
 Extra teacher instructions (follow these unless they conflict with the rules above): {d.get('note') or 'None'}
 Respond ONLY with valid JSON matching this schema, with no markdown or extra keys:
 {json.dumps(SCHEMA)}
-Learning area: {d['area']}; Grade/section: {d['grade']}; Term: {d['term']}; Week: {d['week']}
+Learning area: {d['area']}; Grade/section: {d['grade']}; Term: {d['term']}; Week: {d['week'] or 'not week-based (the source lists topics/units, not weeks)'}
 Lesson title: {d['title'] or 'Create an appropriate title'}; Teacher: {d['teacher'] or 'Not specified'}
 Learner/classroom context: {d['context'] or 'Not specified'}
 {d.get('bow_match', '')}
@@ -3341,7 +3395,9 @@ with lesson_tab:
                     else:
                         bow_text, bow_filename = "", ""
                     bow_title = topic_hit[2]["lesson"] if topic_hit else str(title or "").strip()
-                    week = f"Week {topic_hit[2]['from']}" if topic_hit and topic_hit[2].get("from") else "Week 1"
+                    # Weekless BOWs (SHS course units, Kindergarten themes) have no
+                    # week numbers — never send the AI a phantom 'Week 1'.
+                    week = f"Week {topic_hit[2]['from']}" if topic_hit and topic_hit[2].get("from") else ""
                     # The topic's own term wins (multi-term BOWs); synthesized "Term 1"
                     # applies to no-term BOWs; otherwise keep the teacher's choice.
                     term = (topic_hit[1].get("term") if topic_hit else "") or bow_auto_term or str(term or "").strip()
@@ -3354,6 +3410,9 @@ with lesson_tab:
                             st.info(f"Term not stated in the source — inferred **{derived}** from {week} "
                                     "(Weeks 1–12 → Term 1, 13–24 → Term 2, 25–36 → Term 3).")
                             term = derived
+                    if bow_struct:
+                        for _t in bow_struct:
+                            _t["_selected_topic"] = bow_title  # title-match hint for weekless BOWs
                     details = {"area": area, "grade": grade, "term": term, "week": week, "strategy": strategy,
                                "title": bow_title, "sessions": 0, "duration": duration, "medium": medium,
                                "teacher": teacher, "context": context, "note": note.strip(),

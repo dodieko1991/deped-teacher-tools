@@ -63,7 +63,7 @@ def check(name, cond, extra=""):
         fails.append(name)
 
 
-check("v1.9.0", app._APP_VERSION == "2.1.0")
+check("v1.9.0", app._APP_VERSION == "2.2.0")
 check("book ref regex", bool(app._BOOK_REF_RE.match("Physics Essentials, J. Domingo, p. 45")))
 m = app._SITE_REF_RE.match("Khan Academy, URL: https://www.khanacademy.org/science")
 check("site ref regex", bool(m and m.group("url") == "https://www.khanacademy.org/science"))

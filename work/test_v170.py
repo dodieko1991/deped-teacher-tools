@@ -135,7 +135,7 @@ check("excel: declaration font >= 11", float(ws["B15"].font.size) >= 11.0, ws["B
 check("excel: references font >= 11", float(ws["B16"].font.size) >= 11.0, ws["B16"].font.size)
 
 # ---------------------------------------------------------------- version
-check("version: 1.9.0", app._APP_VERSION == "2.1.0", app._APP_VERSION)
+check("version: 1.9.0", app._APP_VERSION == "2.2.0", app._APP_VERSION)
 
 print()
 if failures:

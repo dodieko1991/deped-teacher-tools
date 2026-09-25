@@ -79,7 +79,7 @@ def check(name, cond, extra=""):
         fails.append(name)
 
 
-check("version 1.9.0", app._APP_VERSION == "2.1.0")
+check("version 1.9.0", app._APP_VERSION == "2.2.0")
 
 # --- tab order: ILAW | ILAW-LIL | Test Paper | PPT ---------------------------
 src = Path(app.__file__).read_text(encoding="utf-8")
