@@ -30,6 +30,16 @@ def build_payload() -> str:
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for path in FILES:
             archive.write(path, path)
+        # The BOW Library container folder next to app.py: drop BOW PDFs here
+        # (Grade folders) and the app finds them without any Desktop setup.
+        archive.writestr("BOW Library/PUT BOW FILES HERE.txt",
+                         "Ilha ang mga BOW PDF dinhi.\r\n\r\n"
+                         "Create one folder per grade (Kindergarten, Grade 1 ... Grade 12) and copy\r\n"
+                         "the official DepEd BOW PDFs inside, e.g.:\r\n\r\n"
+                         "  BOW Library\\Grade 9\\Science.pdf\r\n"
+                         "  BOW Library\\Grade 9\\Mathematics.pdf\r\n\r\n"
+                         "The app reads this folder automatically. Without it, the Desktop copy\r\n"
+                         "(Desktop\\DepEd BOW Files) is used; online, the built-in library applies.\r\n")
     return base64.b64encode(buffer.getvalue()).decode()
 
 

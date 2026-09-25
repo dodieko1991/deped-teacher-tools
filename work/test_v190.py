@@ -105,7 +105,7 @@ check("wiring: basis_files in details", '"basis_files"' in test_src)
 check("order: detection before form", test_src.find("detect_exemplar_meta") < test_src.find('st.form("test_form")'))
 
 # ------------------------------------------------- version
-check("version: 2.0.0", app._APP_VERSION == "2.0.1", app._APP_VERSION)
+check("version: 2.0.0", app._APP_VERSION == "2.1.0", app._APP_VERSION)
 
 print()
 if failures:

@@ -56,7 +56,7 @@ Keys stay in your browser session only — nothing is saved to disk.
 
 ## 📘 Tab 1 — ILAW Lesson Plan (built-in BOW library)
 
-1. **Pick your Grade level and Subject** from the dropdowns — the app reads the official DepEd BOW library (Kindergarten, Grades 1–12, ~240 subjects). On your computer it uses the `DepEd BOW Files` folder on your Desktop (parsed once and cached); **online (Streamlit Cloud) the same library is built into the app itself** — no Desktop folder needed.
+1. **Pick your Grade level and Subject** from the dropdowns — the app reads the official DepEd BOW library (Kindergarten, Grades 1–12, ~240 subjects). It looks for the **`BOW Library` folder next to app.py** first (everything travels with the app — put BOW PDFs in `BOW Library\Grade 9\Science.pdf` and they appear in the dropdowns), then falls back to the Desktop copy (`DepEd BOW Files`); **online (Streamlit Cloud) the same library is built into the app itself**.
 2. **Pick your lesson/topic** from the dropdown — every entry shows its **Term and Week** straight from the BOW (e.g., *"Term 2 · Week 5 to 6 — Origin of the Solar System"*). Grade 11/12 BOWs have no terms, so entries show *"Week 1 — topic"*; Senior High units and Kindergarten themes show the topic title.
 3. Learning Area, Term, and Lesson name **auto-fill and lock** from your pick.
 4. **The app decides the number of sessions for you** — the AI reads the topic's competencies and weekly time allotment and creates exactly the sessions the topic needs (1–5). You no longer choose it.

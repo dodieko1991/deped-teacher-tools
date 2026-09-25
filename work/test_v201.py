@@ -116,7 +116,7 @@ check("9. library_bow_text falls back to seed", len(app.library_bow_text("Grade 
 check("10. library_bow_text unknown subject empty", app.library_bow_text("Grade 9", "Nope") == "", "")
 
 src = (ROOT / "app.py").read_text(encoding="utf-8")
-check("11. version 2.0.1", app._APP_VERSION == "2.0.1", app._APP_VERSION)
+check("11. version 2.0.1", app._APP_VERSION == "2.1.0", app._APP_VERSION)
 check("12. missing-library message gone from code",
       "was not found on the Desktop" not in src,
       "message removed because the seed fallback makes the library always available")

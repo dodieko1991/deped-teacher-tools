@@ -8,6 +8,7 @@ outputs/
 work/*.log
 work/__pycache__/
 feedback.xlsx
+BOW Library/
 feedback_overflow.xlsx
 
 # OS junk

@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-_APP_VERSION = "2.0.1"  # bump this when shipping new updates
+_APP_VERSION = "2.1.0"  # bump this when shipping new updates
 from copy import copy
 from datetime import date, datetime
 from io import BytesIO
@@ -1120,11 +1120,14 @@ def summarize_bow(struct, term=None, week=None):
 
 
 # ---------------------------------------------------------------------------
-# Built-in BOW library — the app scans the official DepEd BOW collection on the
-# teacher's Desktop (C:\Users\Administrator\Desktop\DepEd BOW Files\<Grade>\*.pdf)
-# so the ILAW tab can offer Grade → Subject → Topic dropdowns instead of a file
-# upload. Every file is parsed ONCE and cached on disk (JSON) plus in Streamlit's
-# cache, so reruns and restarts stay fast. Three document shapes are handled:
+# Built-in BOW library — the app scans the official DepEd BOW collection so the
+# ILAW tab can offer Grade → Subject → Topic dropdowns instead of a file upload.
+# The first-choice location is the "BOW Library" container folder NEXT TO app.py
+# (<app folder>\BOW Library\<Grade>\*.pdf) — everything travels with the app.
+# If that folder does not exist, the teacher's Desktop library is used instead
+# (C:\Users\Administrator\Desktop\DepEd BOW Files\<Grade>\*.pdf). Every file is
+# parsed ONCE and cached on disk (JSON) plus in session state, so reruns and
+# restarts stay fast. Three document shapes are handled:
 #   A/B — week-row BOWs with or without 'First/Second/Third Term' headings
 #         (Kindergarten–Grade 10, Tech-Pro G12); the parser above handles both.
 #   S   — Senior High School course BOWs with numbered units and competencies
@@ -1134,7 +1137,21 @@ def summarize_bow(struct, term=None, week=None):
 # Files the extractor cannot read yet are still listed, with a warning, and the
 # teacher can always fall back to uploading that BOW manually.
 # ---------------------------------------------------------------------------
-BOW_LIBRARY_DIR = Path(os.environ.get("DEPED_BOW_LIBRARY", r"C:\Users\Administrator\Desktop\DepEd BOW Files"))
+_APP_DIR = Path(__file__).resolve().parent
+
+
+def resolve_bow_library_dir():
+    """Pick the BOW library folder: env override, container next to app, then Desktop."""
+    env = os.environ.get("DEPED_BOW_LIBRARY")
+    if env:
+        return Path(env)
+    container = _APP_DIR / "BOW Library"
+    if container.is_dir():
+        return container
+    return Path(r"C:\Users\Administrator\Desktop\DepEd BOW Files")
+
+
+BOW_LIBRARY_DIR = resolve_bow_library_dir()
 BOW_LIBRARY_CACHE = Path(os.environ.get("DEPED_BOW_CACHE", str(Path(__file__).resolve().parent / "bow_library_cache.json")))
 GRADE_CHOICES = ["Kindergarten"] + [f"Grade {n}" for n in range(1, 13)]
 
@@ -1217,7 +1234,7 @@ def topic_label(term_name, row):
 
 
 def _scan_bow_library():
-    """Scan the Desktop BOW folder once and parse every PDF found. Slow path."""
+    """Scan the BOW library folder once and parse every PDF found. Slow path."""
     library = {}
     if not BOW_LIBRARY_DIR.is_dir():
         return library
@@ -1327,7 +1344,7 @@ def load_bow_library():
             cache_bytes = b""
     if not cache_bytes:
         if stamp:
-            # Real Desktop library present — scan it and write the disk cache.
+            # Real BOW library present — scan it and write the disk cache.
             library = _scan_bow_library()
             try:
                 BOW_LIBRARY_CACHE.write_text(json.dumps({"stamp": stamp, "library": library}, ensure_ascii=False), encoding="utf-8")
@@ -1352,7 +1369,7 @@ def load_bow_library():
 def library_bow_text(grade, subject):
     """Full raw BOW text for one library subject — the AI's raw BOW basis.
 
-    Reads the PDF from the Desktop library when it exists (local installs); on
+    Reads the PDF from the BOW library folder when it exists (local installs); on
     deployments without the PDFs (Streamlit Cloud) the gzip+base64 text embedded
     in the bundled bow_library_seed.json is used instead.
     """
@@ -3214,7 +3231,7 @@ with lesson_tab:
     lib = load_bow_library()
     grade_choices = [g for g in GRADE_CHOICES if g in lib] or GRADE_CHOICES
     bow_sel_grade = st.selectbox("Grade level *", grade_choices, key="ilaw_lib_grade",
-                                 help="Every grade folder found in the BOW library on your Desktop.")
+                                 help="Every grade folder found in the BOW library (the container next to the app, or the Desktop copy).")
     subject_options = sorted(lib.get(bow_sel_grade, {}))
     bow_sel_subject = st.selectbox("Subject *", subject_options, key="ilaw_lib_subject", index=None,
                                    placeholder="Select subject" if subject_options else "No BOW files found for this grade",
