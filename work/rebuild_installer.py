@@ -11,6 +11,7 @@ from datetime import date
 
 FILES = [
     "app.py",
+    "bow_library_seed.json",
     "requirements.txt",
     "README.md",
     "SAMPLE ILAW FORMAT_WIDE.xlsx",

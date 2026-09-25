@@ -190,7 +190,7 @@ check("24. library_bow_text returns PDF text", "BASIC CALCULUS" in text, text[:6
 check("25. missing subject -> empty text", app.library_bow_text("Grade 11", "Nope") == "", "")
 
 # version
-check("26. version is 2.0.0", app._APP_VERSION == "2.0.0", app._APP_VERSION)
+check("26. version is 2.0.0", app._APP_VERSION == "2.0.1", app._APP_VERSION)
 
 print(f"\n{'ALL PASS' if not failures else 'FAILURES: ' + ', '.join(failures)}")
 sys.exit(1 if failures else 0)

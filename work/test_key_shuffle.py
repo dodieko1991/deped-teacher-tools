@@ -63,7 +63,7 @@ def check(name, cond, extra=""):
         fails.append(name)
 
 
-check("v1.9.0", app._APP_VERSION == "2.0.0")
+check("v1.9.0", app._APP_VERSION == "2.0.1")
 check("prompt has ANSWER KEY SPREAD rule", "ANSWER KEY SPREAD" in app.make_test_prompt("BASIS", {"items": 10, "test_type": "Examination", "mix": {"lots": 40, "mots": 30, "hots": 30}, "hots_min": 3, "grade": "G9", "area": "Science", "term": "T1"}))
 
 

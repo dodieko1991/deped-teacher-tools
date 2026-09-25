@@ -1,4 +1,6 @@
 import ast
+import base64
+import gzip
 import json
 import math
 import os
@@ -10,7 +12,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-_APP_VERSION = "2.0.0"  # bump this when shipping new updates
+_APP_VERSION = "2.0.1"  # bump this when shipping new updates
 from copy import copy
 from datetime import date, datetime
 from io import BytesIO
@@ -1259,24 +1261,53 @@ def _library_cached(cache_bytes):
         return {"library": {}}
 
 
+def _bundled_seed_bytes():
+    """Read bow_library_seed.json bundled with the deployed app (Streamlit Cloud)."""
+    try:
+        return (Path(__file__).resolve().parent / "bow_library_seed.json").read_bytes()
+    except OSError:
+        return b""
+
+
+def _seed_text(grade, subject):
+    """Gzip+base64 raw BOW text embedded in the bundled seed for one subject."""
+    payload = st.session_state.get("_bow_seed_decoded")
+    if payload is None:
+        try:
+            payload = json.loads(_bundled_seed_bytes().decode("utf-8"))
+        except Exception:
+            payload = {"library": {}}
+        st.session_state["_bow_seed_decoded"] = payload
+    entry = payload.get("library", {}).get(grade, {}).get(subject, {})
+    packed = entry.get("text") if isinstance(entry, dict) else ""
+    if not packed:
+        return ""
+    try:
+        return gzip.decompress(base64.b64decode(packed)).decode("utf-8")
+    except Exception:
+        return ""
+
+
 def load_bow_library():
     """Return the parsed BOW library {grade: {subject: {terms, area, grade}}}.
 
     A JSON disk cache sits next to app.py so teachers don't re-parse ~300 PDFs on
     every launch. A freshly written cache (<60s old) is trusted without re-scanning
     the PDF mtimes, keeping warm starts fast; older caches are revalidated against
-    the newest PDF before reuse. The newest-PDF stamp is memoized per session, and
-    decoded payloads are memoized in st.session_state as well. The cache is only
-    ever written from a real scan of BOW_LIBRARY_DIR, never from a foreign payload.
+    the newest PDF before reuse. When no BOW PDFs exist anywhere (the folder is
+    missing or empty — e.g. Streamlit Cloud), the library falls back to the seed
+    bundled with the deploy. Payloads are memoized in st.session_state per session.
+    The cache is only ever written from a real scan of BOW_LIBRARY_DIR, never from
+    a foreign payload.
     """
-    stamp = st.session_state.get("_bow_library_stamp")
-    if stamp is None:
-        try:
-            stamps = [p.stat().st_mtime for p in BOW_LIBRARY_DIR.rglob("*.pdf")] if BOW_LIBRARY_DIR.is_dir() else []
-            stamp = max(stamps) if stamps else 0.0
-        except OSError:
-            stamp = 0.0
-        st.session_state["_bow_library_stamp"] = stamp
+    payload = st.session_state.get("_bow_library_payload")
+    if isinstance(payload, dict):
+        return payload.get("library") or {}
+    try:
+        stamps = [p.stat().st_mtime for p in BOW_LIBRARY_DIR.rglob("*.pdf")] if BOW_LIBRARY_DIR.is_dir() else []
+        stamp = max(stamps) if stamps else 0.0
+    except OSError:
+        stamp = 0.0
     cache_bytes = b""
     try:
         cache_mtime = BOW_LIBRARY_CACHE.stat().st_mtime if BOW_LIBRARY_CACHE.exists() else 0.0
@@ -1295,37 +1326,49 @@ def load_bow_library():
         except Exception:
             cache_bytes = b""
     if not cache_bytes:
-        library = _scan_bow_library()
-        if BOW_LIBRARY_DIR.is_dir():
+        if stamp:
+            # Real Desktop library present — scan it and write the disk cache.
+            library = _scan_bow_library()
             try:
                 BOW_LIBRARY_CACHE.write_text(json.dumps({"stamp": stamp, "library": library}, ensure_ascii=False), encoding="utf-8")
             except OSError:
                 pass
-        st.session_state["_bow_library_decoded"] = {"library": library}
+        else:
+            # No BOW PDFs anywhere (folder missing or empty — e.g. Streamlit
+            # Cloud): use the seed bundled with the deploy so the library
+            # dropdowns still work online.
+            seed = _library_cached(_bundled_seed_bytes())
+            library = seed.get("library") if isinstance(seed, dict) else None
+            if not isinstance(library, dict):
+                library = {}
+        st.session_state["_bow_library_payload"] = {"library": library}
         return library
-    payload = st.session_state.get("_bow_library_decoded")
-    if payload is None:
-        payload = _library_cached(cache_bytes)
-        st.session_state["_bow_library_decoded"] = payload
+    payload = _library_cached(cache_bytes)
+    st.session_state["_bow_library_payload"] = payload
     library = payload.get("library") if isinstance(payload, dict) else None
     return library if isinstance(library, dict) else {}
 
 
 def library_bow_text(grade, subject):
-    """Full cached PDF text for one library subject — the AI's raw BOW basis."""
+    """Full raw BOW text for one library subject — the AI's raw BOW basis.
+
+    Reads the PDF from the Desktop library when it exists (local installs); on
+    deployments without the PDFs (Streamlit Cloud) the gzip+base64 text embedded
+    in the bundled bow_library_seed.json is used instead.
+    """
     folder = BOW_LIBRARY_DIR / grade
-    if not folder.is_dir():
+    if folder.is_dir():
+        for path in folder.glob("*.pdf"):
+            stem = re.sub(r"^\[[^\]]+\]\s*", "", path.stem)
+            stem = re.sub(r"^Updated as of [\d.]+_", "", stem)
+            if re.sub(r"\s+", " ", stem).strip() == subject:
+                try:
+                    reader = PdfReader(str(path))
+                    return "\n".join(page.extract_text() or "" for page in reader.pages)[:60000]
+                except Exception:
+                    return ""
         return ""
-    for path in folder.glob("*.pdf"):
-        stem = re.sub(r"^\[[^\]]+\]\s*", "", path.stem)
-        stem = re.sub(r"^Updated as of [\d.]+_", "", stem)
-        if re.sub(r"\s+", " ", stem).strip() == subject:
-            try:
-                reader = PdfReader(str(path))
-                return "\n".join(page.extract_text() or "" for page in reader.pages)[:60000]
-            except Exception:
-                return ""
-    return ""
+    return _seed_text(grade, subject)[:60000]
 
 
 def plan_session_count(details, plan):
@@ -3162,8 +3205,9 @@ with st.sidebar:
 lesson_tab, lil_tab, test_tab, ppt_tab = st.tabs(["📘 ILAW Lesson Plan", "📗 ILAW-LIL (Implementation Log)", "📝 Test Paper Generator", "🖥️ PowerPoint Generator"])
 
 with lesson_tab:
-    st.caption("Step 1 — pick your Grade level, Subject, and lesson topic from the built-in BOW library on the Desktop "
-               "(DepEd BOW Files). Step 2 — pick a Teaching Strategy; the app itself decides how many sessions the topic needs.")
+    st.caption("Step 1 — pick your Grade level, Subject, and lesson topic from the built-in BOW library "
+               "(the official DepEd Budget of Work for Kindergarten to Grade 12). Step 2 — pick a Teaching Strategy; "
+               "the app itself decides how many sessions the topic needs.")
 
     # --- STEP 1: choose the lesson from the built-in BOW library (Grade → Subject → Topic). ---
     st.subheader("1 · Choose your lesson (built-in BOW library)")
@@ -3226,8 +3270,6 @@ with lesson_tab:
         except Exception as exc:
             st.error(f"Could not read the BOW file: {exc}")
             bow_struct = []
-    elif not lib:
-        st.info("The BOW library folder was not found on the Desktop — upload a BOW above to continue.")
 
     # --- STEP 2: lesson details. The library locks area/grade/lesson/term; the AI decides the session count. ---
     topic_hit = topic_lookup.get(bow_sel_topic) if bow_sel_topic else None
