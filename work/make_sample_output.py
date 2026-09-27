@@ -128,6 +128,15 @@ details = {
     "strategy": "5Es Model — Engage, Explore, Explain, Elaborate, Evaluate",
     "title": bow_title, "sessions": 0, "duration": "60 minutes", "medium": "English",
     "teacher": "JOSE DENNIS P. CHUA", "context": LEARNER_CONTEXT, "note": "",
+    # The reference-style boxes the reconstructed tab now pre-fills from the BOW.
+    "competency": "\n".join(topic_hit[2].get("competencies") or []),
+    "content_standards": "The learner demonstrates understanding of the key concepts of trigonometric identities.",
+    "performance_standards": ("The learner is able to apply trigonometric identities accurately to simplify "
+                              "expressions, prove identities, and solve problems."),
+    "objectives": ("Knowledge: state the sum, difference, double-angle and half-angle formulas. "
+                   "Skills: apply them to simplify expressions and prove identities. "
+                   "Attitude: work accurately and check a partner's reasoning."),
+    "resources": "Chalkboard / whiteboard, Printed worksheets, Visual aids, Calculators",
     "bow": app.summarize_bow(bow_struct, term, week) + "\n\nRAW BOW TEXT:\n" + bow_text,
     "bow_filename": f"{GRADE}\\{SUBJECT}",
     "bow_match": app.match_bow_row(bow_struct, term, week),
