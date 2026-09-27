@@ -71,7 +71,7 @@ def check(name, cond, extra=""):
         fails.append(name)
 
 
-check("version is 1.9.0", app._APP_VERSION == "2.2.0", app._APP_VERSION)
+check("version is 1.9.0", app._APP_VERSION == "2.4.0", app._APP_VERSION)
 
 # --- 1. first answer parses -> NO retry, NO extra call -----------------------
 calls = {"n": 0}
@@ -147,11 +147,13 @@ check("lenient-repairable junk: only 1 call", calls["n"] == 1, calls["n"])
 
 # --- 5. generation entry points are wired to the retrying parser -------------
 src = Path(app.__file__).read_text(encoding="utf-8")
-for needle in ("plan = _ask_and_parse(make_prompt(details)",
+# v2.3.0: the ILAW draft + review passes go through _ask_plan_completing, which
+# wraps _ask_and_parse and never lets a curriculum refusal end the generation.
+for needle in ("plan = _ask_plan_completing(make_prompt(details)",
                "plan = _ask_and_parse(make_lil_prompt(details)",
                "plan = _ask_and_parse(make_test_prompt(enriched_basis, d)",
                "plan = _ask_and_parse(prompt,",  # ppt plan + sessions
-               "corrected = _ask_and_parse("):
+               "corrected = _ask_plan_completing("):
     check(f"wired: {needle[:44]}", needle in src)
 check("no legacy direct parse left outside the helper",
       src.count("_parse_json_lenient(_extract_json_text") == 2)

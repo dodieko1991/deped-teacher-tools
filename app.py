@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-_APP_VERSION = "2.2.0"  # bump this when shipping new updates
+_APP_VERSION = "2.4.0"  # bump this when shipping new updates
 from copy import copy
 from datetime import date, datetime
 from io import BytesIO
@@ -215,6 +215,8 @@ TEACHING_STRATEGIES = [
 
 SCHEMA = {
     "lesson_title": "string", "overview": "string", "standards_and_competency": "Exact BOW competency, with code when supplied",
+    "curriculum_verification": "VERIFIED when the topic and competency were found in the supplied BOW/source, otherwise UNVERIFIED — the plan is still complete",
+    "verification_note": "one short sentence telling the teacher what to double-check or upload; '' when VERIFIED",
     "teacher_notes": ["string"],
     "sessions": [{
         "session": "Session 1", "topic": "one topic string",
@@ -610,6 +612,37 @@ def _raise_if_curriculum_refusal(data):
         raise ValueError(str(data.get("message") or (
             "Curriculum alignment could not be verified. Please provide the "
             "corresponding BOW, Lesson Exemplar, or official curriculum source.")))
+
+
+def _ask_plan_completing(prompt, options=None):
+    """Ask for the lesson plan, never letting a refusal end the generation.
+
+    The reference ILAW generators teachers use freely (depedtambayanph, etc.)
+    always return a draft — they simply trust the teacher's own competency input.
+    Our BOW grounding is an extra, so it must never be a dead end: when a model
+    still answers the verification rule with a refusal object, ask ONE more time
+    with the explicit "deliver the full plan, label it UNVERIFIED" override.
+    Only if the retry also refuses does the teacher see a message.
+    """
+    plan = _ask_and_parse(prompt, options)
+    if isinstance(plan, dict) and str(plan.get("curriculum_verification", "")).upper() == "FAILED":
+        plan = _ask_and_parse(prompt + "\n\n" + VERIFICATION_RECOVERY, options)
+    _raise_if_curriculum_refusal(plan)
+    return plan
+
+
+def _verification_status(plan):
+    """Normalize the model's verification label to VERIFIED / UNVERIFIED + note."""
+    raw = str(plan.get("curriculum_verification") or "").strip().upper()
+    status = "VERIFIED" if raw in ("VERIFIED", "PASSED", "OK", "TRUE") else "UNVERIFIED"
+    note = str(plan.get("verification_note") or "").strip()
+    if status == "VERIFIED":
+        note = ""
+    elif not note:
+        note = ("The topic was not matched inside the supplied BOW/source, so the plan is a draft: "
+                "check the competency and pacing against the official BOW before use.")
+    plan["curriculum_verification"], plan["verification_note"] = status, note
+    return plan
 
 
 def _raise_http_with_body(exc):
@@ -1476,6 +1509,58 @@ def _strategy_phases(strategy):
     return [p.strip() for p in tail.split(",") if p.strip()]
 
 
+# ---------------------------------------------------------------------------
+# REFERENCE-STYLE ILAW PLANNER
+# The ILAW LP + PPT generator teachers know (depedtambayanph.net and similar
+# tools) works because it never gates the teacher: it collects the week's own
+# context — competency, content/performance standards, objectives, learner
+# context, lesson design pattern, and the materials on hand — and lets the AI
+# unpack that into the daily sessions. These lists mirror that planner's form so
+# the same prompting style works here, with our BOW library supplying the
+# competency and pacing instead of the teacher retyping everything.
+# ---------------------------------------------------------------------------
+ILAW_DESIGN_PATTERN_DEFAULT = "Default (AI selects the best-fit model and names it in the flow)"
+ILAW_DESIGN_PATTERNS = [ILAW_DESIGN_PATTERN_DEFAULT] + TEACHING_STRATEGIES
+ILAW_SESSION_CHOICES = ["Auto — the AI decides from the topic and its competencies"] + [
+    "5 Sessions (1 Week)", "4 Sessions (1 Week)", "3 Sessions (1 Week)", "2 Sessions (1 Week)", "1 Session"]
+ILAW_LEARNER_CONTEXTS = [
+    "Mixed readiness levels; visual & hands-on",
+    "Highly engaged / fast learners",
+    "Requires scaffolding / struggles with reading",
+    "Active / social learners (group-oriented)",
+    "Inclusive / diverse learning needs",
+    "Short attention spans (needs chunking)",
+    "Tech-savvy / motivated by multimedia",
+    "Quiet / reserved (needs encouragement)",
+    "Other (write your own below)",
+]
+ILAW_RESOURCE_OPTIONS = [
+    "Laptop / Computer", "Projector / Smart TV", "Slide presentation", "Visual aids",
+    "Manipulatives / models", "Printed worksheets", "Chalkboard / whiteboard",
+    "Art / craft materials", "Audio / speakers", "Realia (real objects)",
+]
+ILAW_MEDIA = ["English", "Filipino", "Cebuano", "Mother tongue / local language", "Mixed"]
+
+ILAW_CONTEXTUALIZATION = """CRITICAL CONTEXTUALIZATION — the learners are in a Filipino community with varying
+levels of proficiency. The activities and content must be culturally responsive, inclusive, and deeply
+contextualized for Filipino learners: use real-life examples, community practices, local traditions, and
+local materials that fit the competency, and avoid foreign-only examples when a local one works."""
+
+
+def ilaw_session_count(choice):
+    """Session count from the reference-style 'No. of sessions' choice.
+
+    'Auto — the AI decides…' (or nothing) → 0, which lets plan_session_count()
+    take the model's own count, clamped to 1–5. The reference planner's fixed
+    options ('5 Sessions (1 Week)' … '1 Session') return that exact number.
+    """
+    text = str(choice or "").strip()
+    if not text or text.lower().startswith("auto"):
+        return 0
+    digits = re.search(r"\d", text)
+    return max(1, min(5, int(digits.group(0)))) if digits else 0
+
+
 def _session_rule(sessions):
     """Prompt paragraph for the session count: fixed count when given, AI decides when not."""
     try:
@@ -1490,32 +1575,101 @@ def _session_rule(sessions):
             "session count. Record the number you decide in session_count and create exactly that many session objects;")
 
 
+def _weekly_context_block(d):
+    """The reference-style 'WEEKLY OVERARCHING CONTEXT' block.
+
+    The DepEd Tambayan ILAW planner hands the model ONE explicit context block —
+    lesson name, competency, content/performance standards, objectives, learner
+    context, design pattern, materials on hand — and the AI unpacks it into the
+    daily sessions. Lines the teacher left blank are marked so the model fills
+    them honestly (from the BOW/source) instead of pretending they were given.
+    """
+
+    def line(label, value, empty):
+        text = str(value or "").strip()
+        return f"- {label}: {text if text else empty}"
+
+    term = str(d.get("term") or "").strip()
+    week = str(d.get("week") or "").strip()
+    if week:
+        term_week = " · ".join(p for p in (term, week) if p)
+    else:
+        term_week = (f"{term} — " if term else "") + "not week-based (the source lists topics/units, not weeks)"
+    return "\n".join([
+        "WEEKLY OVERARCHING CONTEXT:",
+        line("Lesson Name", d.get("title"), "[not provided — generate a concise title from the competency]"),
+        line("Grade & Section", d.get("grade"), "[not provided]"),
+        line("Learning Area", d.get("area"), "[not provided]"),
+        line("Learning Competency", d.get("competency"),
+             "[not provided — take the competency from the BOW/source below and keep its exact wording]"),
+        line("Content Standards", d.get("content_standards"),
+             "[not provided — use the content standard of the BOW/curriculum that matches this competency]"),
+        line("Performance Standards", d.get("performance_standards"),
+             "[not provided — use the performance standard of the curriculum that matches this competency]"),
+        line("General Learning Objectives", d.get("objectives"),
+             "[not provided — unpack the competency into K.S.A. objectives yourself, per session]"),
+        line("General Learner Context", d.get("context"),
+             "[not provided — assume mixed readiness levels and varied support needs]"),
+        line("Lesson Design Pattern", d.get("strategy"), ILAW_DESIGN_PATTERN_DEFAULT),
+        line("Available Learning Resources", d.get("resources"),
+             "[not provided — use low-cost, locally available materials and say so]"),
+        line("Medium of Instruction", d.get("medium"), "English"),
+        f"- Term / Week: {term_week}",
+        line("Duration per Session", d.get("duration"), "60 minutes"),
+        line("Additional Instructions / Prompts", d.get("note"), "None provided."),
+    ])
+
+
+def _design_pattern_rule(d):
+    """Prompt paragraph for the lesson design pattern, including the reference's
+    'Default (AI selects)' option: the model chooses a framework and must name it."""
+    design = str(d.get("strategy") or "").strip() or ILAW_DESIGN_PATTERN_DEFAULT
+    if design.lower().startswith("default"):
+        return ("LESSON DESIGN PATTERN: the teacher left the framework to you. Choose the one that best fits\n"
+                "this competency and learner context (Explicit Instruction, 5Es, 6Es/7Es, 5As, 4As, Inquiry-Based,\n"
+                "Problem-Based, Project-Based, Experiential Learning Cycle, or I Do–We Do–You Do), then START that\n"
+                "session's flow with its name on its own line as 'Framework: <name>'. Write every phase of the\n"
+                "chosen framework on its own line as 'PhaseName: paragraph' — never merge two phases into one\n"
+                "paragraph, and never leave a phase out. The paragraph after each label is 3 to 6 full sentences\n"
+                "describing concrete teacher and learner actions. No numbering, no asterisks, no markdown; the\n"
+                "'Label:' prefix and the line breaks are the only formatting.")
+    return (f"Required design pattern: {design}. The FLOW must explicitly use this pattern's phases in their\n"
+            f"logical order. Do not substitute another model. The phases of {design} are exactly:\n"
+            f"{', '.join(_strategy_phases(design))}. Write EACH phase on its own line as 'PhaseName: paragraph' —\n"
+            "never merge two phases into one paragraph; every phase starts on a FRESH line with its 'PhaseName:'\n"
+            "label. For models whose phase is called Evaluate or Extend, describe that phase as part of the\n"
+            "in-class procedure in FLOW, but keep the formal assessment details in formative_assessment and any\n"
+            "outside-class task in extended_learning. The paragraph after each label is 3 to 6 full sentences\n"
+            "describing concrete teacher and learner actions. No numbering, no asterisks, no markdown; the\n"
+            "'Label:' prefix and the line breaks are the only formatting.")
+
+
 def make_prompt(d):
-    return f"""You are an expert Philippine DepEd teacher creating a DRAFT weekly ILAW lesson plan.
-ILAW means Intentions, Learning Experiences, Assessing Learning, and Ways Forward.
-Use the supplied competency source as the basis for learning competencies and pacing. Do not invent
-competency codes or claim DepEd approval. {_session_rule(d.get('sessions'))} their activity times should fit
-approximately {d['duration']} each. Use {d['medium']}.
-{CURRICULUM_SOURCE_PRIORITY}
+    return f"""You are an expert curriculum developer for the Department of Education (Philippines) writing a
+DRAFT weekly ILAW lesson plan. ILAW means Intentions, Learning Experiences, Assessing Learning, and
+Ways Forward. Unpack the week's competency into the daily sessions following the DepEd ILAW guidelines,
+with the teacher's own competency, standards, objectives, learner context, and materials as the starting
+point and the BOW/source below as the authority for competency wording and pacing. Do not invent
+competency codes and never claim DepEd approval. {_session_rule(d.get('sessions'))} their activity times should
+fit approximately {d['duration']} each.
+Write EVERY row of the output STRICTLY in {d['medium']}.
 {STRICT_CURRICULUM_VERIFICATION}
-Required teaching strategy model: {d['strategy']}. The FLOW must explicitly use this model's phases
-in their logical order. Do not substitute another teaching strategy model. For models whose phase is
-called Evaluate or Extend, describe that phase as part of the in-class procedure in FLOW, but keep the
-formal assessment details in formative_assessment and any outside-class task in extended_learning.
+{CURRICULUM_SOURCE_PRIORITY}
+{ILAW_QUALITY_RUBRIC}
+{ILAW_CONTEXTUALIZATION}
+{_design_pattern_rule(d)}
 Keep each part strictly in its designated ILAW row:
 - pre_lesson: only learner readiness, prior-knowledge activation, motivation, or well-being check.
 - learning_objectives: unpack the competency into SMART objectives. Do NOT go beyond the Bloom's
   taxonomy level of the learning competency — if the competency targets "apply", do not write
-  "create" or "evaluate" objectives. Cover Knowledge, Skills, and Attitude (KSA): include at least
-  one knowledge objective, one skills objective, and one attitude/values objective.
+  "create" or "evaluate" objectives. Cover Knowledge, Skills, and Attitude (KSA): at least one
+  objective per domain, each written on its own '- ' line and labelled 'Knowledge:', 'Skills:', or
+  'Attitude:'.
 - flow: only the in-class teaching-learning procedure needed to meet the objectives. Include sequencing,
   teacher/learner actions, collaboration, guided practice, and independent practice. NEVER include a
   formative assessment, extended learning/homework, feedback/closure, or teacher reflection here.
-  FORMAT: write EACH phase of {d['strategy']} on its own line as 'PhaseName: paragraph'. The phases of
-  {d['strategy']} are exactly: {', '.join(_strategy_phases(d['strategy']))}. Never merge two phases into
-  one paragraph — every phase starts on a FRESH line with its 'PhaseName:' label. The paragraph after
-  each label is 3 to 6 full sentences describing concrete teacher and learner actions. No numbering, no
-  asterisks, no markdown; the 'Label:' prefix and the line breaks are the only formatting.
+  FORMAT: follow the lesson design pattern rule above to the letter — every phase on its own line as
+  'PhaseName: paragraph' ('Framework: <name>' first when the pattern was left to you).
 - learning_resources: list the actual teaching materials for that session, one per '- ' line, and END the
   list with exactly ONE reference for the session in one of these two forms:
   '- Book Title, Author, Page N' (for a book) or '- Website Name, URL: full link' (for a website).
@@ -1537,8 +1691,10 @@ SOURCE FIDELITY — before writing anything, review the plan against the source:
   identify anything invented or unsupported; REMOVE unsupported content; preserve original activity
   titles and numbers; and make sure the Component is NOT merely a repetition of the Learning Area.
 - Return only the corrected ILAW plan.
+{_weekly_context_block(d)}
 Extra teacher instructions (follow these unless they conflict with the rules above): {d.get('note') or 'None'}
-Respond ONLY with valid JSON matching this schema, with no markdown or extra keys:
+Provide no text or explanation other than the pure JSON object. Respond ONLY with valid JSON matching
+this schema, with no markdown and no extra keys:
 {json.dumps(SCHEMA)}
 Learning area: {d['area']}; Grade/section: {d['grade']}; Term: {d['term']}; Week: {d['week'] or 'not week-based (the source lists topics/units, not weeks)'}
 Lesson title: {d['title'] or 'Create an appropriate title'}; Teacher: {d['teacher'] or 'Not specified'}
@@ -1596,36 +1752,67 @@ Term, and Week, follow this order:
 6. Never combine content from different weeks or lessons.
 7. If multiple sources disagree, prioritize the official DepEd source and
    do not silently choose an unsupported topic.
-8. If the lesson cannot be verified, clearly report:
-   "Curriculum alignment could not be verified from the available sources."
+8. If the lesson cannot be verified against a supplied source, still deliver
+   the complete plan and label it UNVERIFIED with a short verification note —
+   never stop the teacher with a refusal.
    """
 
 
-STRICT_CURRICULUM_VERIFICATION = """STRICT CURRICULUM VERIFICATION RULE:
+STRICT_CURRICULUM_VERIFICATION = """STRICT CURRICULUM VERIFICATION RULE (VERIFY FIRST — THEN ALWAYS DELIVER):
 
-Do not generate an ILAW lesson plan until the lesson topic and learning
-competency have been verified for the exact:
+STEP 1 - Verify the lesson topic and its learning competency for the exact:
 
-Grade Level + Learning Area + Term + Week.
+Grade Level + Learning Area + Term + Week
 
-If the lesson topic cannot be verified from a reliable curriculum source,
-DO NOT invent or infer a topic from general knowledge.
+against the BOW / curriculum source supplied below (or, when none is supplied,
+against well-known public DepEd curriculum content for that Learning Area and
+Grade Level).
 
-Return:
+STEP 2 - ALWAYS return the complete ILAW plan in the requested JSON, whatever
+STEP 1 found. NEVER refuse, NEVER reply with only a refusal object, and NEVER
+leave a row blank: the teacher is teaching this lesson today and needs a
+usable draft. Which label you attach is how you stay honest:
 
-"Curriculum alignment could not be verified. Please provide the
-corresponding BOW, Lesson Exemplar, or official curriculum source."
+- Competency and topic found in the supplied source: set
+  "curriculum_verification": "VERIFIED".
+- Not found in the supplied source, or no source was supplied (SHS course units
+  with no week numbers, Kindergarten themes, teacher-typed topics, etc.): still
+  write the FULL plan for the given topic and set
+  "curriculum_verification": "UNVERIFIED", then write one short sentence in
+  "verification_note" telling the teacher exactly what to double-check or
+  upload next (for example: "Unit competencies came from the SHS BOW; verify the
+  week number because this course lists units, not weeks.").
 
-Do not generate learning objectives, activities, assessments, or
-Ways Forward based on an unverified topic.
+Never invent or infer a competency CODE, and never substitute a different topic,
+lesson, or week for the one given. Never fabricate URLs, references, textbook
+page numbers, or source titles. If a reference cannot be verified, omit it or
+label it as: "Teacher-provided resource - verification required."
+"""
 
-Never fabricate URLs, references, textbook page numbers, or source titles.
 
-If a reference cannot be verified, omit it or label it as:
-"Teacher-provided resource - verification required."
+VERIFICATION_RECOVERY = """OVERRIDE — the teacher needs the lesson plan now. Do NOT reply with a refusal
+object or an explanation. Return the FULL ILAW plan in the requested JSON schema with every
+session row filled. Keep every competency, topic, and reference honest, and mark the plan
+"curriculum_verification": "UNVERIFIED" with one sentence in "verification_note" naming what the
+teacher must check or upload. Blank rows and short answers are not acceptable."""
 
-WHEN THE LESSON CANNOT BE VERIFIED, respond ONLY with this JSON and nothing else:
-{"curriculum_verification": "FAILED", "message": "Curriculum alignment could not be verified. Please provide the corresponding BOW, Lesson Exemplar, or official curriculum source."}
+
+ILAW_QUALITY_RUBRIC = """ILAW QUALITY RUBRIC — the plan must satisfy EVERY item:
+1. Each session's learning_objectives are clearly stated and every objective carries its domain
+   label ('Knowledge:', 'Skills:', 'Attitude:'); all three domains appear in every session.
+2. Intentions are coherent across the whole matrix: objectives, pre_lesson, flow,
+   formative_assessment, and extended_learning all serve the same competency and never repeat
+   each other.
+3. flow is clear — another teacher can teach the session straight from it, step by step, without
+   asking what happens next.
+4. flow explicitly embeds the required teaching strategy model phase by phase, plus checking for
+   understanding, active retrieval, and social/collaborative learning.
+5. integration is real (another learning area, a community practice, or technology) or N/A —
+   never a generic mention of "values" or "technology" with nothing concrete.
+6. Activities are inclusive and contextualized for Filipino learners: accommodations and varied
+   response formats for learners who struggle, and local examples, materials, and situations.
+7. Assessment runs through the session (not only at the end), yields evidence that each objective
+   was met, and Ways Forward give concrete next steps for extending, supporting, or adjusting.
 """
 
 
@@ -1651,9 +1838,12 @@ For every Learning Competency, Objective, Activity, Assessment, Strategy, and Wa
 {REVIEW_CHECKLIST}
 {CURRICULUM_SOURCE_PRIORITY}
 {STRICT_CURRICULUM_VERIFICATION}
+{ILAW_QUALITY_RUBRIC}
 Return ONLY the corrected ILAW plan as JSON — the full plan in the same schema, with every problem
 fixed and nothing else changed. Keep the exact same number of sessions ({len(_sessions_from_plan(plan))}).
 Keep every strategy-model phase on its own 'PhaseName: paragraph' line exactly as drafted.
+Keep "curriculum_verification" and "verification_note" honest: only upgrade the label to VERIFIED when
+the competency really is found in the source above, and keep the note when you cannot.
 Respond ONLY with valid JSON matching this schema, with no markdown or extra keys:
 {json.dumps(SCHEMA)}
 Learning area: {details.get('area', '')}; Grade/section: {details.get('grade', '')}; Term: {details.get('term', '')}; Week: {details.get('week', '')}
@@ -2827,10 +3017,9 @@ def generate(api_key, details):
         details["online_research_note"] = research_note
     else:
         details["reference_source"] = "Budget of Work (BOW) PDF uploaded by teacher."
-    plan = _ask_and_parse(make_prompt(details),
+    plan = _ask_plan_completing(make_prompt(details),
         {"response_mime_type": "application/json", "temperature": 0.35},
     )
-    _raise_if_curriculum_refusal(plan)
     expected = plan_session_count(details, plan)
     plan = _enforce_session_count(plan, expected, make_prompt(details) + (
         f"\nCRITICAL: your previous answer had the wrong number of session objects. Return ONLY the "
@@ -2839,7 +3028,7 @@ def generate(api_key, details):
     # DepEd curriculum when no BOW was uploaded) and return only the corrected plan.
     try:
         with st.spinner("Reviewing the plan against the BOW/source before showing it..."):
-            corrected = _ask_and_parse(
+            corrected = _ask_plan_completing(
                 make_review_prompt(details, plan),
                 {"response_mime_type": "application/json", "temperature": 0.15})
         if isinstance(corrected, dict) and _sessions_from_plan(corrected):
@@ -2859,7 +3048,7 @@ def generate(api_key, details):
             session[field] = _ensure_single_text(session.get(field), field, fallback)
     for field in ("lesson_title", "overview", "standards_and_competency"):
         plan[field] = _ensure_single_text(plan.get(field), field)
-    return plan
+    return _verification_status(plan)
 
 
 # Characters Excel forbids inside worksheet XML (openpyxl raises "cannot be used
@@ -3095,7 +3284,10 @@ def excel_export(plan, d, picks=None):
     sheet = workbook["WEEKLY LESSON PLAN"]
     picks = picks or {}  # [LEGACY] old 3-option picks; single-output plans ignore them
     sheet["B8"], sheet["B9"], sheet["B10"] = first_option(plan.get("lesson_title")), d["area"], d["teacher"]
-    sheet["B11"], sheet["B12"], sheet["B13"] = d["grade"], d["week"], d["sessions"]
+    # Session count comes from the plan itself in the BOW-library flow, where
+    # details['sessions'] stays 0 because the AI decides it.
+    session_total = len(_sessions_from_plan(plan)) or d["sessions"]
+    sheet["B11"], sheet["B12"], sheet["B13"] = d["grade"], d["week"], session_total
     # Declaration of AI use — DO 3 s.2026 Annex A wording; only the teacher's name,
     # the AI used, and the learning area are filled in.
     ai_name = d.get("ai_provider", "AI tools")
@@ -3126,7 +3318,19 @@ def excel_export(plan, d, picks=None):
     if d.get("online_sources"):
         references.extend(f"{source['title']}, URL: {source['url']}" for source in d["online_sources"][:4])
     if d.get("bow_filename"):
-        references.append(f"Uploaded BOW file: {d['bow_filename']}")
+        # The library flow passes 'Grade 11\\Advanced Mathematics'; an uploaded
+        # file passes its own filename.
+        if "\\" in str(d["bow_filename"]):
+            grade_part, _, subject_part = str(d["bow_filename"]).partition("\\")
+            references.append(f"Built-in BOW library: {grade_part} · {subject_part}")
+        else:
+            references.append(f"Uploaded BOW file: {d['bow_filename']}")
+    if str(plan.get("curriculum_verification", "")).upper() == "VERIFIED":
+        references.append(f"Curriculum alignment: VERIFIED against {d.get('reference_source', 'the supplied source')}.")
+    else:
+        note = str(plan.get("verification_note") or "").strip()
+        references.append("Curriculum alignment: NOT verified against a BOW/source — "
+                          + (note or "verify the competency and pacing before use."))
     if not references:
         references.append(f"{d.get('reference_source', 'Competency source not recorded')} Term: {d['term']}; Week: {d['week']}.")
     sheet["B16"] = bold_references_rich("\n".join(f"- {ref}" for ref in references))
@@ -3153,7 +3357,12 @@ def excel_export(plan, d, picks=None):
             alignment.vertical = "top"
             cell.alignment = alignment
     # TERM/WEEK in the template's own A12 label row (B12 is a merged B12:F12 cell).
-    sheet["B12"] = f"{d['term']} / {d['week']}"
+    # Weekless BOWs (SHS course units) must never print a dangling 'Term 1 / '.
+    term_text = str(d.get("term") or "").strip()
+    week_text = str(d.get("week") or "").strip()
+    sheet["B12"] = f"{term_text} / {week_text}" if week_text else (
+        term_text + " — BOW lists course units, no weeks to show" if term_text
+        else "Not stated in the source — verify against the official BOW")
     # Auto-fit every content row so the full text is visible without manual resizing:
     # estimate one text line per ~55 characters of a 41-wide column and add padding.
     for row in (15, 16, 18, 19, 20, 22, 23, 24, 25, 27, 29, 30):
@@ -3182,6 +3391,12 @@ def excel_export(plan, d, picks=None):
 
 def show_plan(plan):
     """Read-only single-result view of the reviewed ILAW plan."""
+    if str(plan.get("curriculum_verification", "")).upper() == "VERIFIED":
+        st.success("✅ Curriculum alignment VERIFIED against the supplied BOW/source.")
+    else:
+        st.warning("⚠️ Curriculum alignment NOT verified against a BOW/source — this is a usable draft, "
+                   "not a DepEd-verified lesson. " + str(plan.get("verification_note") or
+                   "Double-check the competency and pacing against the official BOW before use."))
     st.subheader(first_option(plan.get("lesson_title"), "ILAW Lesson Plan"))
     st.info(first_option(plan.get("overview")))
     st.write(f"**Standards and competency:** {first_option(plan.get('standards_and_competency'))}")
@@ -3277,8 +3492,9 @@ lesson_tab, lil_tab, test_tab, ppt_tab = st.tabs(["📘 ILAW Lesson Plan", "📗
 
 with lesson_tab:
     st.caption("Step 1 — pick your Grade level, Subject, and lesson topic from the built-in BOW library "
-               "(the official DepEd Budget of Work for Kindergarten to Grade 12). Step 2 — pick a Teaching Strategy; "
-               "the app itself decides how many sessions the topic needs.")
+               "(the official DepEd Budget of Work for Kindergarten to Grade 12). Step 2 — confirm the week's "
+               "intentions: competency, standards, learner context, lesson design pattern, and the materials you "
+               "actually have. The AI unpacks them into the daily ILAW sessions.")
 
     # --- STEP 1: choose the lesson from the built-in BOW library (Grade → Subject → Topic). ---
     st.subheader("1 · Choose your lesson (built-in BOW library)")
@@ -3301,8 +3517,11 @@ with lesson_tab:
                 label = topic_label(t.get("term"), row)
                 topic_options.append(label)
                 topic_lookup[label] = (t_index, t, row)
-        if topic_options and term_locked:
-            bow_auto_term = bow_auto_term or "Term 1"
+        # A BOW that states its terms fills the Term box; a unit-based SHS BOW has
+        # no terms at all, so the teacher keeps control and Term 1 is only the
+        # default (never a silently "inferred" term).
+        if topic_options and not any(str(t.get("term", "")).strip() for t in lib[bow_sel_grade][bow_sel_subject]["terms"]):
+            bow_auto_term = "Term 1"
     bow_sel_topic = st.selectbox("Lesson / topic *", topic_options, key="ilaw_lib_topic", index=None,
                                  placeholder="Select lesson / topic" if topic_options else
                                              ("No topics could be listed from this BOW — use the upload below" if bow_sel_subject else "Select a subject first"),
@@ -3342,41 +3561,110 @@ with lesson_tab:
             st.error(f"Could not read the BOW file: {exc}")
             bow_struct = []
 
-    # --- STEP 2: lesson details. The library locks area/grade/lesson/term; the AI decides the session count. ---
+    # --- STEP 2: Weekly Lesson Details & Intentions (reference-style form) ------
+    # The form mirrors the DepEd Tambayan ILAW planner: pick the topic from the BOW
+    # library, then confirm/edit the week's own context (competency, standards,
+    # objectives, learner context, design pattern, materials). Nothing is locked —
+    # the AI follows what the teacher gives it, with the BOW text as the authority.
     topic_hit = topic_lookup.get(bow_sel_topic) if bow_sel_topic else None
+    lib_entry = lib.get(bow_sel_grade, {}).get(bow_sel_subject, {}) if bow_sel_subject else {}
+    lib_area = str(lib_entry.get("area") or "") or bow_area_hint
+    topic_lesson = topic_hit[2]["lesson"] if topic_hit else ""
+    topic_comps = list(topic_hit[2].get("competencies") or []) if topic_hit else []
+    week_default = f"Week {topic_hit[2]['from']}" if topic_hit and topic_hit[2].get("from") else ""
+    # The Term box locks ONLY when the source itself states this topic's term
+    # (e.g. 'Term 2 · Week 5 to 6'). For unit-based SHS BOWs the teacher chooses
+    # the term the class is actually in.
+    term_locked = bool(topic_hit and str(topic_hit[1].get("term") or "").strip())
+    term_default = (str(topic_hit[1].get("term") or "").strip() if topic_hit else "") or bow_auto_term or "Term 1"
+    # Seed the widget state: Streamlit keeps the first value a keyed widget ever
+    # had, so without this the Term box stayed blank for unit-based SHS BOWs. A
+    # term the teacher already chose is never overwritten.
+    if term_locked or not str(st.session_state.get("ilaw_term") or "").strip():
+        st.session_state["ilaw_term"] = term_default
+
     with st.form("ilaw_form"):
-        st.subheader("2 · Lesson details")
+        st.subheader("2 · Weekly Lesson Details & Intentions")
+        st.caption("Pre-filled from the BOW when you pick a topic — edit any box. Your competency, standards, "
+                   "objectives, learner context, and materials are what the AI unpacks into the daily sessions; "
+                   "the BOW text stays the authority for competency wording and pacing.")
         left, right = st.columns(2)
         with left:
-            area = st.text_input("Learning area / subject *",
-                                 value=(bow_area_hint or (lib.get(bow_sel_grade, {}).get(bow_sel_subject, {}).get("area") if bow_sel_subject else "") or ""),
-                                 disabled=bool(topic_hit), key=f"ilaw_area__{bow_sel_grade}__{bow_sel_subject or 'none'}",
-                                 help="Filled automatically from the BOW." if topic_hit else None,
+            title = st.text_input("Name of lesson", value=topic_lesson, key=f"ilaw_title__{bow_sel_topic or 'manual'}",
+                                  placeholder="Auto-filled from the BOW topic — edit if you wish")
+            area = st.text_input("Learning area / subject *", value=lib_area,
+                                 key=f"ilaw_area__{bow_sel_grade}__{bow_sel_subject or 'none'}",
                                  placeholder="e.g., Science")
+            teacher = st.text_input("Designed by teacher/s (optional)", key="ilaw_teacher",
+                                    placeholder="Ex. Juan D. Dela Cruz")
             grade = st.text_input("Grade level and section *", value=bow_sel_grade or "",
-                                  placeholder="e.g., Grade 9 – Hydrogen (add your section)", key=f"ilaw_grade__{bow_sel_grade or 'none'}")
-            term = st.selectbox("Term", ["Term 1", "Term 2", "Term 3"], key="ilaw_term",
-                                disabled=term_locked or bool(topic_hit),
-                                index={"Term 1": 0, "Term 2": 1, "Term 3": 2}.get(bow_auto_term),
-                                help="Auto-selected from the BOW." if (topic_hit or term_locked) else None)
-            strategy = st.selectbox("Teaching Strategy Model *", TEACHING_STRATEGIES, index=None, placeholder="Select a required model", key="ilaw_strategy")
+                                  key=f"ilaw_grade__{bow_sel_grade or 'none'}",
+                                  placeholder="e.g., Grade 9 – Hydrogen (add your section)")
+            sessions_pick = st.selectbox("No. of sessions", ILAW_SESSION_CHOICES, key="ilaw_sessions",
+                                         help="'Auto' is recommended: the AI reads the topic's competencies and weekly "
+                                              "time allotment and creates exactly the sessions the topic needs. Pick a "
+                                              "number to fix the count yourself.")
+            medium = st.selectbox("Medium of instruction", ILAW_MEDIA, key="ilaw_medium",
+                                  help="Every row of the plan is written strictly in this language.")
         with right:
-            title = st.text_input("Name of lesson", value=(topic_hit[2]["lesson"] if topic_hit else ""),
-                                  disabled=bool(topic_hit), key=f"ilaw_title__{bow_sel_topic or 'manual'}",
-                                  placeholder="Auto-filled from the BOW topic",
-                                  help="Filled automatically from the selected BOW topic." if topic_hit else None)
-            st.caption("🔢 The number of sessions is decided by the AI from the topic's competencies and weekly time allotment — you no longer choose it.")
+            term = st.selectbox("Select term", ["Term 1", "Term 2", "Term 3"], key="ilaw_term",
+                                disabled=term_locked,
+                                index={"Term 1": 0, "Term 2": 1, "Term 3": 2}.get(term_default, 0),
+                                help=(f"Locked to {term_default} — stated in the BOW for this topic." if term_locked else
+                                      ("This course's BOW lists units, not weeks/terms — pick the term your class is "
+                                       "in. Default: Term 1." if topic_hit else None)))
+            week_input = st.text_input("Select week (optional)", value=week_default,
+                                       key=f"ilaw_week__{bow_sel_topic or 'manual'}",
+                                       placeholder="e.g., Week 5 — leave blank when the BOW lists no weeks")
             duration = st.selectbox("Duration per session", ["40 minutes", "50 minutes", "60 minutes"], key="ilaw_duration")
-            medium = st.selectbox("Medium of instruction", ["English", "Filipino", "Cebuano", "Mother tongue / local language", "Mixed"], key="ilaw_medium")
-        teacher = st.text_input("Teachers Name (optional)", key="ilaw_teacher")
-        context = st.text_area("Learner/classroom context (optional)", key="ilaw_context")
-        note = st.text_area("Additional instructions (optional) — your own prompt to improve the output", placeholder="e.g., Use more hands-on activities; include local examples from Agusan del Sur; emphasize group work; keep language simple for struggling readers.", help="Anything you add here is sent to the AI as extra instructions for your lesson plan.", key="ilaw_note")
-        submitted = st.form_submit_button("Generate ILAW lesson plan", type="primary", use_container_width=True)
+            strategy = st.selectbox("Lesson Design Pattern", ILAW_DESIGN_PATTERNS, key="ilaw_strategy",
+                                    help="'Default' lets the AI choose the best-fit framework and name it at the top of "
+                                         "each session's flow. Pick a specific model to require it.")
+
+        st.markdown("**Weekly Intentions**")
+        st.caption("Give the overarching competency for the week — the AI unpacks it into the daily sessions.")
+        competency = st.text_area("Learning Competency *", value="\n".join(topic_comps), height=120,
+                                  key=f"ilaw_comp__{bow_sel_topic or 'manual'}",
+                                  placeholder="Type or paste the competency/ies from the curriculum or your BOW…",
+                                  help="Pre-filled from the BOW when the topic carries competencies. Edit it freely.")
+        std_left, std_right = st.columns(2)
+        with std_left:
+            content_std = st.text_area("Content Standards (optional)", height=100,
+                                       key=f"ilaw_cs__{bow_sel_topic or 'manual'}",
+                                       placeholder="The content standard that applies to the week…")
+        with std_right:
+            perf_std = st.text_area("Performance Standards (optional)", height=100,
+                                    key=f"ilaw_ps__{bow_sel_topic or 'manual'}",
+                                    placeholder="The performance standard that applies to the week…")
+        objectives = st.text_area("General Learning Objectives (optional)", height=90, key="ilaw_objectives",
+                                  placeholder="Leave blank and let the AI write per-session K.S.A. objectives, or list your own…")
+
+        st.markdown("**Learner Context**")
+        st.caption("Observations only — the AI uses them to choose activities, groupings, and accommodations.")
+        context_pick = st.selectbox("What are your learners like?", ILAW_LEARNER_CONTEXTS, key="ilaw_ctx_pick")
+        context_notes = st.text_area("Your own observations (optional)", height=80, key="ilaw_context",
+                                     placeholder="Strengths, interests, barriers, languages spoken at home…")
+
+        st.markdown("**Learning Resources Available**")
+        st.caption("Check what you actually have; the AI builds the sessions around them and offers alternatives.")
+        resource_columns = st.columns(2)
+        picked_resources = []
+        for resource_index, resource_item in enumerate(ILAW_RESOURCE_OPTIONS):
+            with resource_columns[resource_index % 2]:
+                if st.checkbox(resource_item, key=f"ilaw_res__{resource_index}"):
+                    picked_resources.append(resource_item)
+        resource_other = st.text_input("Other resources (optional)", key="ilaw_res_other",
+                                       placeholder="e.g., metre tape, bamboo sticks, barangay map")
+
+        note = st.text_area("Additional Instructions / Prompts (optional)", key="ilaw_note",
+                            placeholder="e.g., Focus on gamification; include local examples from Agusan del Sur; keep language simple for struggling readers.",
+                            help="Anything here is sent to the AI as extra instructions for your lesson plan.")
+        submitted = st.form_submit_button("Generate ILAW Lesson Plan (AI)", type="primary", use_container_width=True)
 
     if submitted:
-        required = {"Learning area": area, "Grade level and section": grade, "Teaching Strategy Model": strategy}
-        if not topic_hit and not (bow_file and str(title or "").strip()):
-            required["Lesson / topic"] = bow_sel_topic
+        required = {"Learning area": area, "Grade level and section": grade, "Learning Competency": competency}
+        if not topic_hit and not str(title or "").strip():
+            required["Name of lesson / topic"] = bow_sel_topic
         missing = [label for label, value in required.items() if not value or not str(value).strip()]
         if missing:
             st.error("Please complete: " + ", ".join(missing))
@@ -3384,7 +3672,7 @@ with lesson_tab:
             st.error(f"Add your {cfg['key_label']} in the sidebar.")
         else:
             try:
-                with st.spinner("Reading the BOW and creating your ILAW lesson plan..."):
+                with st.spinner("Reading the BOW and unpacking your competencies into sessions..."):
                     if topic_hit:
                         bow_struct = lib[bow_sel_grade][bow_sel_subject]["terms"]
                         bow_text = library_bow_text(bow_sel_grade, bow_sel_subject)
@@ -3394,28 +3682,30 @@ with lesson_tab:
                         bow_filename = bow_file.name
                     else:
                         bow_text, bow_filename = "", ""
-                    bow_title = topic_hit[2]["lesson"] if topic_hit else str(title or "").strip()
-                    # Weekless BOWs (SHS course units, Kindergarten themes) have no
-                    # week numbers — never send the AI a phantom 'Week 1'.
-                    week = f"Week {topic_hit[2]['from']}" if topic_hit and topic_hit[2].get("from") else ""
-                    # The topic's own term wins (multi-term BOWs); synthesized "Term 1"
-                    # applies to no-term BOWs; otherwise keep the teacher's choice.
-                    term = (topic_hit[1].get("term") if topic_hit else "") or bow_auto_term or str(term or "").strip()
-                    # No explicit Term from the source? Infer it from the week number:
-                    # Weeks 1–12 → Term 1, 13–24 → Term 2, 25–36 → Term 3.
-                    if not str(term or "").strip():
-                        week_num_match = re.search(r"\d{1,2}", str(week or ""))
-                        derived = term_for_week(week_num_match.group(0)) if week_num_match else ""
-                        if derived:
-                            st.info(f"Term not stated in the source — inferred **{derived}** from {week} "
-                                    "(Weeks 1–12 → Term 1, 13–24 → Term 2, 25–36 → Term 3).")
-                            term = derived
+                    bow_title = str(title or "").strip() or (topic_hit[2]["lesson"] if topic_hit else "")
+                    # The teacher's own box wins; without it, the BOW row's week is
+                    # used. Weekless BOWs (SHS units, Kindergarten themes) send no
+                    # week at all — never a phantom 'Week 1'.
+                    week = str(week_input or "").strip() or (
+                        f"Week {topic_hit[2]['from']}" if topic_hit and topic_hit[2].get("from") else "")
+                    # Source-stated term wins; otherwise the teacher's own choice.
+                    term = (topic_hit[1].get("term") if topic_hit else "") or str(term or "").strip() or bow_auto_term
                     if bow_struct:
                         for _t in bow_struct:
                             _t["_selected_topic"] = bow_title  # title-match hint for weekless BOWs
+                    # Learner context: the preset, the teacher's own notes, or both.
+                    learner_context = "" if str(context_pick).startswith("Other") else str(context_pick)
+                    if str(context_notes or "").strip():
+                        learner_context = (learner_context + ". " if learner_context else "") + str(context_notes).strip()
+                    resources = ", ".join(picked_resources + ([str(resource_other).strip()]
+                                                            if str(resource_other or "").strip() else []))
+                    session_count = ilaw_session_count(sessions_pick)
                     details = {"area": area, "grade": grade, "term": term, "week": week, "strategy": strategy,
-                               "title": bow_title, "sessions": 0, "duration": duration, "medium": medium,
-                               "teacher": teacher, "context": context, "note": note.strip(),
+                               "title": bow_title, "sessions": session_count, "duration": duration, "medium": medium,
+                               "teacher": teacher, "context": learner_context, "note": note.strip(),
+                               "competency": competency.strip(), "content_standards": content_std.strip(),
+                               "performance_standards": perf_std.strip(), "objectives": objectives.strip(),
+                               "resources": resources,
                                "bow": (summarize_bow(bow_struct, term, week) + "\n\nRAW BOW TEXT:\n" + bow_text) if bow_struct else bow_text,
                                "bow_filename": bow_filename,
                                "bow_match": match_bow_row(bow_struct, term, week)}

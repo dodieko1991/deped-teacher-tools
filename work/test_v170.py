@@ -84,8 +84,13 @@ src = Path(__file__).resolve().parent.parent.joinpath("app.py").read_text(encodi
 check("wire: term disabled with BOW", "disabled=bow_locked" in src.split("ilaw_term\"")[1][:200] or "key=\"ilaw_term\"" in src)
 term_lines = src.splitlines()
 term_i = next(i for i, line in enumerate(term_lines) if 'key="ilaw_term"' in line)
-term_block = " ".join(term_lines[term_i:term_i + 4])
-check("wire: term auto index", "bow_auto_term" in term_block, term_lines[term_i].strip()[:90])
+# v2.3.0: the Term box is driven by term_default (the topic's own term, else the
+# BOW's first term, else Term 1) and now also decides whether it locks.
+# v2.4.0: the Term box is auto-driven (term_default ← the topic's own term, else the
+# BOW's first term, else Term 1) and locks on term_locked instead of the topic.
+check("wire: term auto index",
+      all(needle in src for needle in ("term_default", "bow_auto_term", "disabled=term_locked")),
+      term_lines[term_i].strip()[:90])
 check("wire: term from library topic lookup", "bow_auto_term" in src and "topic_lookup" in src)
 
 # ---------------------------------------------------------------- Excel export
@@ -135,7 +140,7 @@ check("excel: declaration font >= 11", float(ws["B15"].font.size) >= 11.0, ws["B
 check("excel: references font >= 11", float(ws["B16"].font.size) >= 11.0, ws["B16"].font.size)
 
 # ---------------------------------------------------------------- version
-check("version: 1.9.0", app._APP_VERSION == "2.2.0", app._APP_VERSION)
+check("version: 1.9.0", app._APP_VERSION == "2.4.0", app._APP_VERSION)
 
 print()
 if failures:

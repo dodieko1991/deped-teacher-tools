@@ -63,6 +63,7 @@ stub.selectbox = lambda *a, **k: (a[1] if len(a) > 1 and a[1] else (k.get("optio
 stub.text_input = lambda *a, **k: (k.get("value") or "") or ""
 stub.text_area = lambda *a, **k: (k.get("value") or "") or ""
 stub.file_uploader = lambda *a, **k: None
+stub.checkbox = lambda *a, **k: False
 stub.errors = types.ModuleType("streamlit.errors")
 stub.errors.StreamlitSecretNotFoundError = type("StreamlitSecretNotFoundError", (Exception,), {})
 sys.modules["streamlit"] = stub

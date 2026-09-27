@@ -56,7 +56,7 @@ for _name in ("expander", "container", "form", "spinner"):
     setattr(stub, _name, lambda *a, **k: _CM())
 for _name in ("title", "caption", "markdown", "info", "write", "error", "success", "warning",
               "subheader", "header", "button", "download_button", "link_button",
-              "form_submit_button", "select_slider", "radio", "rerun"):
+              "form_submit_button", "select_slider", "radio", "rerun", "checkbox"):
     setattr(stub, _name, lambda *a, **k: None)
 stub.cache_data = lambda f=None, **k: (f if f else (lambda g: g))
 stub.selectbox = lambda *a, **k: (a[1] if len(a) > 1 and a[1] else (k.get("options") or [""]))[0]

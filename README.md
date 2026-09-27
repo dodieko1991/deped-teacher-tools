@@ -54,19 +54,35 @@ Keys stay in your browser session only — nothing is saved to disk.
 
 ---
 
-## 📘 Tab 1 — ILAW Lesson Plan (built-in BOW library)
+## 📘 Tab 1 — ILAW Lesson Plan (built-in BOW library + reference-style planner)
+
+Rebuilt on the approach teachers know from the popular DepEd Tambayan ILAW LP planner: you
+confirm **the week's own intentions** — competency, content and performance standards, general
+objectives, learner context, lesson design pattern, and the materials you actually have — and the
+AI unpacks them into the daily sessions. Our extra: every one of those boxes is **pre-filled from
+the official BOW library**, and the BOW text stays the authority for competency wording and pacing.
 
 1. **Pick your Grade level and Subject** from the dropdowns — the app reads the official DepEd BOW library (Kindergarten, Grades 1–12, ~240 subjects). It looks for the **`BOW Library` folder next to app.py** first (everything travels with the app — put BOW PDFs in `BOW Library\Grade 9\Science.pdf` and they appear in the dropdowns), then falls back to the Desktop copy (`DepEd BOW Files`); **online (Streamlit Cloud) the same library is built into the app itself**.
 2. **Pick your lesson/topic** from the dropdown — every entry shows its **Term and Week** straight from the BOW (e.g., *"Term 2 · Week 5 to 6 — Origin of the Solar System"*). Grade 11/12 BOWs have no terms, so entries show *"Week 1 — topic"*; Senior High units and Kindergarten themes show the topic title.
-3. Learning Area, Term, and Lesson name **auto-fill and lock** from your pick.
-4. **The app decides the number of sessions for you** — the AI reads the topic's competencies and weekly time allotment and creates exactly the sessions the topic needs (1–5). You no longer choose it.
-5. Choose duration, medium, and strategy model; optionally add your own extra instructions.
-6. **Generate** → the AI builds the plan **strictly from your BOW topic**, then a **second AI review pass** verifies every competency, objective, activity, assessment, and strategy and removes anything unsupported.
-7. **Download the Excel** in the official weekly ILAW format — term/week filled in, every cell auto-sized so all text is visible.
+3. **Step 2 — Weekly Lesson Details & Intentions.** Name of lesson, Learning area, Designed by teacher/s, Grade level and section, Term, Week, and Duration are **pre-filled from your pick and stay editable** — nothing is locked except the Term, which locks only when the BOW itself states the term for that topic (e.g. *"Term 2 · Week 5 to 6"*). Senior High BOWs list units, not terms, so there you pick the term your class is in (it defaults to Term 1).
+4. **Weekly Intentions** — the Learning Competency box is pre-filled with the topic's numbered competencies from the BOW (edit or replace it freely), plus optional **Content Standards**, **Performance Standards**, and **General Learning Objectives** (leave blank and the AI writes per-session K.S.A. objectives).
+5. **Learner Context** — pick the preset that describes your class (mixed readiness, needs scaffolding, social learners, inclusive/diverse needs, and more) and/or write your own observations. **Learning Resources Available** — tick the materials you actually have (laptop, projector, slides, visual aids, manipulatives, worksheets, board, art materials, audio, realia, or your own), so the AI builds the sessions around them.
+6. **Lesson Design Pattern** — *Default (AI selects)* lets the AI choose the best-fit framework and name it at the top of each session's flow; or pin a specific model (5Es, 7Es, 4As, 5Ps, I Do–We Do–You Do, Inquiry, Problem/Project-Based, Experiential, and more) and every one of its phases is required.
+7. **No. of sessions** — *Auto* is recommended (the AI reads the competencies and weekly time allotment and creates exactly the sessions the topic needs, 1–5); or fix it at 1–5 yourself, like the reference planner's "5 Sessions (1 Week)" choices.
+8. **Medium of instruction** — English, Filipino, Cebuano, mother tongue, or mixed: every row of the plan is written strictly in that language. Add your own **Additional Instructions** for anything else (local examples, gamification, simpler language).
+9. **Generate** → the AI unpacks your intentions into the daily sessions, then a **second AI review pass** verifies every competency, objective, activity, assessment, and strategy and removes anything unsupported.
+10. **Download the Excel** in the official weekly ILAW format — term/week filled in, every cell auto-sized so all text is visible.
+
+**The app never blocks you.** Each plan carries an alignment label:
+
+- **✅ VERIFIED** — the topic and competency were found in the BOW/source you supplied.
+- **⚠️ NOT verified** — the topic could not be matched inside that source (Senior High courses list units, not weeks; Kindergarten themes; or a topic you typed yourself). You still get the **complete plan**, with one sentence naming exactly what to double-check or upload, and the status is printed in the Excel **References** row.
+
+A lesson plan is never refused and no row is ever left blank — a labelled draft you can teach today beats an error message.
 
 Can't find your subject or topic in the library? Expand **"Upload a BOW manually"** — an uploaded BOW drives the same flow.
 
-Without any BOW, the AI searches official DepEd sources instead — and if it cannot verify the lesson for your Grade + Subject + Term + Week, it **tells you instead of inventing one**.
+Without any BOW, the AI works from well-known public DepEd curriculum content instead, and the plan is labelled **not verified** so you know to check the competency wording before filing it.
 
 ## 📗 Tab 2 — ILAW-LIL (Lesson Implementation Log)
 

@@ -1,5 +1,10 @@
-"""v1.5.3: STRICT CURRICULUM VERIFICATION RULE — exact text in the prompts,
-refusal JSON surfaced as a clean message by the generate functions."""
+"""STRICT CURRICULUM VERIFICATION RULE — the wording lives in the prompts, and the
+refusal JSON is still surfaced as a clean message when a model refuses TWICE.
+
+v2.3.0 note: the rule now ends in a LABEL (VERIFIED / UNVERIFIED) instead of a
+refusal, so a single refusal answer is recovered from automatically. The last
+test below therefore only sees the error because this fake model refuses every
+time, including the recovery turn."""
 import sys
 import types
 from pathlib import Path
@@ -72,16 +77,16 @@ def check(name, cond, extra=""):
         fails.append(name)
 
 
-check("version is 1.9.0", app._APP_VERSION == "2.2.0", app._APP_VERSION)
+check("version is 1.9.0", app._APP_VERSION == "2.4.0", app._APP_VERSION)
 
 # --- exact rule text lives in the constant -----------------------------------
 rule = app.STRICT_CURRICULUM_VERIFICATION
 for phrase in ("STRICT CURRICULUM VERIFICATION RULE",
                "Grade Level + Learning Area + Term + Week",
-               "DO NOT invent or infer a topic from general knowledge",
-               "Curriculum alignment could not be verified. Please provide the",
-               "Do not generate learning objectives, activities, assessments, or",
-               "Never fabricate URLs, references, textbook page numbers, or source titles",
+               "ALWAYS return the complete ILAW plan",
+               "NEVER refuse, NEVER reply with only a refusal object",
+               "never substitute a different topic,",
+               "Never fabricate URLs, references, textbook",
                "Teacher-provided resource - verification required"):
     check(f"rule text: {phrase[:42]}", phrase in rule)
 

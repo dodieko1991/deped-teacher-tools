@@ -83,6 +83,7 @@ stub.radio = lambda *a, **k: (a[1] or [""])[0]
 stub.text_input = lambda *a, **k: (k.get("value") or "") or ""
 stub.text_area = lambda *a, **k: (k.get("value") or "") or ""
 stub.file_uploader = lambda *a, **k: None
+stub.checkbox = lambda *a, **k: False
 stub.download_button = lambda *a, **k: None
 stub.link_button = lambda *a, **k: None
 stub.cache_data = lambda f=None, **k: (f if f else (lambda g: g))

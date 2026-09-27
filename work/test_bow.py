@@ -136,9 +136,18 @@ check("order: ILAW first, LIL second", tab_decl.find("ILAW Lesson Plan") < tab_d
 
 # ------------------------------------------------- lock behavior
 check("lock: topic lock defined", "topic_hit = topic_lookup.get(" in src)
-check("lock: >=2 disabled fields from BOW topic", src.count("disabled=bool(topic_hit)") >= 2, str(src.count("disabled=bool(topic_hit)")))
-check("lock: BOW lesson feeds title", "ilaw_title__" in src or "ilaw_lesson_locked" in src)
-check("lock: title prefilled from BOW row", "bow_title" in src)
+# v2.4.0 (+ v2.3.0): the reference-style ILAW form PRE-FILLS the teacher's own
+# boxes instead of disabling them, so only the Term box still locks — and only
+# when the BOW itself states the term for that topic.
+check("lock: the BOW topic pre-fills the lesson title box",
+      "value=topic_lesson" in src and "ilaw_title__" in src)
+check("lock: the BOW topic pre-fills area/grade/term",
+      all(needle in src for needle in ("value=lib_area", "value=bow_sel_grade or", "term_default")))
+check("lock: only the Term box still locks from the source",
+      src.count("disabled=term_locked") >= 1 and "disabled=bool(topic_hit)" not in src)
+check("lock: teacher competency box pre-filled from BOW competencies",
+      '"\\n".join(topic_comps)' in src)
+check("lock: title prefilled from BOW row", "bow_title" in src) 
 
 # ------------------------------------------------- prompt wiring
 p = app.make_prompt({"grade": "9", "area": "Science", "term": "Term 1", "week": "Week 1",
@@ -159,7 +168,7 @@ check("prompt: LIL keeps source-priority", "CURRICULUM SOURCE PRIORITY" in app.m
      "teacher": "T", "note": "", "exemplar": "EXEMPLAR BODY"}))
 
 # ------------------------------------------------- version
-check("version: 1.9.0", app._APP_VERSION == "2.2.0", app._APP_VERSION)
+check("version: 1.9.0", app._APP_VERSION == "2.4.0", app._APP_VERSION)
 
 print()
 if failures:
