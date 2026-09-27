@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-_APP_VERSION = "2.4.0"  # bump this when shipping new updates
+_APP_VERSION = "2.5.0"  # bump this when shipping new updates
 from copy import copy
 from datetime import date, datetime
 from io import BytesIO
@@ -1540,6 +1540,10 @@ ILAW_RESOURCE_OPTIONS = [
     "Art / craft materials", "Audio / speakers", "Realia (real objects)",
 ]
 ILAW_MEDIA = ["English", "Filipino", "Cebuano", "Mother tongue / local language", "Mixed"]
+ILAW_TERMS = ["Term 1", "Term 2", "Term 3"]
+ILAW_DURATIONS = ["40 minutes", "50 minutes", "60 minutes"]
+LIL_SESSION_CHOICES = ["1 Session", "2 Sessions (1 Week)", "3 Sessions (1 Week)",
+                       "4 Sessions (1 Week)", "5 Sessions (1 Week)"]
 
 ILAW_CONTEXTUALIZATION = """CRITICAL CONTEXTUALIZATION — the learners are in a Filipino community with varying
 levels of proficiency. The activities and content must be culturally responsive, inclusive, and deeply
@@ -2814,6 +2818,8 @@ def generate_ppt_plan(basis, d):
 LIL_SCHEMA = {
     "log_title": "string", "overview": "string",
     "component": "string",
+    "curriculum_verification": "VERIFIED when the competency and activities were found in the uploaded Lesson Exemplar, otherwise UNVERIFIED — the log is still complete",
+    "verification_note": "one short sentence telling the teacher what to double-check or upload; '' when VERIFIED",
     "learning_competency": "exact competency text taken from the Lesson Exemplar; never invent codes",
     "sessions": [{
         "session": "Session 1", "topic": "one topic string",
@@ -2846,60 +2852,85 @@ LIL_SESSION_FIELDS = [
 
 
 def make_lil_prompt(d):
-    """Prompt for one Lesson Implementation Log session from the uploaded exemplar."""
-    phases = ', '.join(_strategy_phases(d['strategy']))
-    return f"""You are an expert Philippine DepEd teacher creating a DRAFT Lesson Implementation Log (LIL) based on a Lesson Exemplar.
-A Lesson Implementation Log documents what was implemented in class based on a Lesson Exemplar.
-READ THE ENTIRE LESSON EXEMPLAR THOROUGHLY — it contains one or more complete lessons with their
-objectives, activities, and assessment items. Use it as the sole basis: copy the learning competency,
-objectives, activities, and assessment items from it as closely as possible — never invent content
-that is not in the exemplar. Do not invent learner names: when learners are described, refer to groups
-or needs only.
-PRIMARY SOURCE RULE: Use the Lesson Exemplar as the primary source. Do not invent activities,
-strategies, learning competencies, or assessment tasks that are not supported by the exemplar. You
-may distribute the exemplar's existing activities across the specified number of instructional days
-({d['sessions']} sessions), but preserve the original activity names, sequence, and content. The
-required teaching strategy model only structures the FLOW phases — the activities you place inside
-each phase must be the exemplar's own activities, under their original names and in their original
-sequence.
-Required teaching strategy model: {d['strategy']}. The FLOW must explicitly use this model's phases in
-their logical order. FORMAT: write EACH phase of {d['strategy']} on its own line as 'PhaseName: paragraph'.
-{CURRICULUM_SOURCE_PRIORITY}
+    """Prompt for the Lesson Implementation Log (LIL), built exactly like the ILAW one.
+
+    Same reference-style blocks — the teacher's own week context, the quality
+    rubric, the never-refuse rule — plus the LIL's own rule: when a Lesson
+    Exemplar was uploaded it is the sole basis; when the teacher uploaded none,
+    the AI researches well-known public DepEd sources instead (the same fallback
+    the ILAW tab uses when no BOW is picked).
+    """
+    design = str(d.get("strategy") or "").strip() or ILAW_DESIGN_PATTERN_DEFAULT
+    phases = ', '.join(_strategy_phases(design))
+    sessions = d.get("sessions") or 0
+    exemplar = str(d.get("exemplar") or "")
+    searching = bool(d.get("online_search")) or not exemplar.strip()
+    if searching:
+        basis = (
+            "NO Lesson Exemplar was uploaded. Research well-known public DepEd curriculum content for this\n"
+            "Learning Area and Grade Level and build the log from it. Keep the activity names, sequence, and\n"
+            "assessment items of the sources you rely on, never invent a competency code, URL, title, or page\n"
+            "number, say clearly when a detail is uncertain, and mark the log \"curriculum_verification\":\n"
+            "\"UNVERIFIED\" with a short verification_note telling the teacher what to check or upload next.\n")
+    else:
+        basis = (
+            "A Lesson Implementation Log documents what was implemented in class based on a Lesson Exemplar.\n"
+            "READ THE ENTIRE LESSON EXEMPLAR THOROUGHLY — it contains one or more complete lessons with their\n"
+            "objectives, activities, and assessment items. Use it as the sole basis: copy the learning competency,\n"
+            "objectives, activities, and assessment items from it as closely as possible — never invent content\n"
+            "that is not in the exemplar. Do not invent learner names: when learners are described, refer to groups\n"
+            "or needs only.\n"
+            "PRIMARY SOURCE RULE: Use the Lesson Exemplar as the primary source. Do not invent activities,\n"
+            "strategies, learning competencies, or assessment tasks that are not supported by the exemplar. You\n"
+            f"may distribute the exemplar's existing activities across the specified number of instructional days\n"
+            f"({sessions} sessions), but preserve the original activity names, sequence, and content. The\n"
+            "required design pattern only structures the FLOW phases — the activities you place inside each phase\n"
+            "must be the exemplar's own activities, under their original names and in their original sequence.\n")
+    return f"""You are an expert curriculum developer for the Department of Education (Philippines) writing a
+DRAFT Lesson Implementation Log (LIL), following the ILAW guidelines and using the teacher's own week
+as the starting point.
+{basis}
+Design pattern: {design}. The FLOW must explicitly use this pattern's phases in their logical order.
+FORMAT: write EACH phase on its own line as 'PhaseName: paragraph'.
 {STRICT_CURRICULUM_VERIFICATION}
-The phases of {d['strategy']} are exactly: {phases}. Never merge two phases into one paragraph — every
+{CURRICULUM_SOURCE_PRIORITY}
+{ILAW_QUALITY_RUBRIC}
+{ILAW_CONTEXTUALIZATION}
+The phases of {design} are exactly: {phases}. Never merge two phases into one paragraph — every
 phase starts on a FRESH line with its 'PhaseName:' label; each paragraph is 2 to 5 full sentences.
 No numbering, no asterisks, no markdown; the 'Label:' prefix and line breaks are the only formatting.
 - ways_forward: respond as lines, one per option, e.g. '- Proceed as planned' — pick the realistic one
   first, then alternatives. When enrichment is realistic, prepare a HIGHER-LEVEL activity or
   enhancement for the next lesson.
-- learning_objectives: unpack the exemplar's competency into SMART objectives. Do NOT go beyond the
-  Bloom's taxonomy level of the learning competency. Cover Knowledge, Skills, and Attitude (KSA).
+- learning_objectives: unpack the competency into SMART objectives. Do NOT go beyond the
+  Bloom's taxonomy level of the learning competency. Cover Knowledge, Skills, and Attitude (KSA): at
+  least one objective per domain, each on its own '- ' line.
 - assessing_learning: the assessment MUST directly address the session's learning objectives — every
-  objective is measurable by at least one item or task from the exemplar.
-SOURCE FIDELITY — before writing anything, review the log against the Lesson Exemplar:
+  objective is measurable by at least one item or task.
+SOURCE FIDELITY — before writing anything, review the log against its source:
 - Verify every Learning Competency, Objective, Activity, Assessment, Strategy, and Ways Forward is
-  supported by the selected lesson in the exemplar; identify anything taken from another lesson;
-  identify anything invented or unsupported; REMOVE unsupported content; preserve the exemplar's
-  original activity titles and numbers; and make sure the Component is NOT merely a repetition of
-  the Learning Area.
+  supported by the selected lesson; identify anything taken from another lesson; identify anything
+  invented or unsupported; REMOVE unsupported content; preserve the original activity titles and
+  numbers; and make sure the Component is NOT merely a repetition of the Learning Area.
 - Return only the corrected LIL.
+{_weekly_context_block(d)}
 Extra teacher instructions (follow these unless they conflict with the rules above): {d.get('note') or 'None'}
-Respond ONLY with valid JSON matching this schema, with no markdown or extra keys:
+Provide no text or explanation other than the pure JSON object. Respond ONLY with valid JSON matching
+this schema, with no markdown and no extra keys:
 {json.dumps(LIL_SCHEMA)}
-Learning area: {d['area']}; Teacher: {d['teacher'] or 'Not specified'}; Term/Week: {d['termweek']}
-Produce exactly {d['sessions']} session object(s) in the "sessions" array — numbered "Session 1" to
-"Session {d['sessions']}" — one Lesson Implementation Log per session, in teaching order.
-LESSON EXEMPLAR TEXT:
-{d['exemplar'][:60000]}
+Learning area: {d.get('area', '')}; Teacher: {d.get('teacher') or 'Not specified'}; Term/Week: {d.get('termweek') or ''}
+Produce exactly {sessions} session object(s) in the "sessions" array — numbered "Session 1" to
+"Session {sessions}" — one Lesson Implementation Log per session, in teaching order.
+{"LESSON EXEMPLAR TEXT:" if not searching else "TEACHER NOTES AND RESEARCH TASK:"}
+{exemplar[:60000]}
 """
 
 
 def generate_lil(api_key, details):
-    """Generate the LIL draft (3 options per cell) from the uploaded Lesson Exemplar."""
+    """Generate the LIL draft from the Lesson Exemplar (or from AI research)."""
     details["ai_provider"] = st.session_state.get("provider", _DEFAULT_PROVIDER)
-    plan = _ask_and_parse(make_lil_prompt(details),
-                          {"response_mime_type": "application/json", "temperature": 0.35})
-    _raise_if_curriculum_refusal(plan)
+    plan = _ask_plan_completing(make_lil_prompt(details),
+                                {"response_mime_type": "application/json", "temperature": 0.35})
     expected = int(details.get("sessions") or len(_sessions_from_plan(plan)) or 1)
     plan = _enforce_session_count(plan, expected, make_lil_prompt(details) + (
         f"\nCRITICAL: your previous answer had the wrong number of session objects. Return ONLY the "
@@ -2908,7 +2939,7 @@ def generate_lil(api_key, details):
     # return only the corrected log.
     try:
         with st.spinner("Reviewing the log against the Lesson Exemplar before showing it..."):
-            corrected = _ask_and_parse(
+            corrected = _ask_plan_completing(
                 make_lil_review_prompt(details, plan),
                 {"response_mime_type": "application/json", "temperature": 0.15})
         if isinstance(corrected, dict) and _sessions_from_plan(corrected):
@@ -2926,6 +2957,10 @@ def generate_lil(api_key, details):
                                                  fallback="- Proceed as planned" if field == "ways_forward" else "")
     for field in ("log_title", "overview", "component", "learning_competency"):
         plan[field] = _ensure_single_text(plan.get(field), field)
+    if details.get("online_search"):
+        # No exemplar: the log came from AI research, so it can never be VERIFIED.
+        plan["curriculum_verification"] = "UNVERIFIED"
+    _verification_status(plan)
     return plan
 
 
@@ -3416,6 +3451,108 @@ def show_plan(plan):
                     st.markdown(body.replace("\n", "  \n"))
 
 
+def render_weekly_intentions(prefix, *, submit_label, caption, grade_hint="", week_hint="",
+                             term_default="Term 1", term_locked=False, teacher_required=False,
+                             allow_auto_sessions=True, lesson_placeholder=None, competency_placeholder=None):
+    """The shared reference-style 'Weekly Lesson Details & Intentions' form.
+
+    The ILAW tab and the ILAW-LIL tab render EXACTLY this form, so a teacher
+    confirms the same things in the same order on both tabs. Nothing is copied
+    in for the teacher: the BOW or the Lesson Exemplar is a GUIDE shown beside
+    the form, and every box holds only what the teacher typed. Returns their
+    answers as a dict.
+    """
+    session_choices = ILAW_SESSION_CHOICES if allow_auto_sessions else LIL_SESSION_CHOICES
+    term_key = f"{prefix}_term"
+    # Seed the Term widget once: Streamlit keeps the first value a keyed widget
+    # ever had, so without this the box could stay blank. A term the teacher
+    # already chose is never overwritten.
+    if term_locked or not str(st.session_state.get(term_key) or "").strip():
+        st.session_state[term_key] = term_default
+    with st.form(f"{prefix}_form"):
+        st.subheader("2 · Weekly Lesson Details & Intentions")
+        st.caption(caption)
+        left, right = st.columns(2)
+        with left:
+            title = st.text_input("Name of lesson", key=f"{prefix}_title",
+                                  placeholder=lesson_placeholder or "Type your lesson title (or leave blank and the AI names it)")
+            area = st.text_input("Learning area / subject *", key=f"{prefix}_area", placeholder="e.g., Science")
+            teacher = st.text_input("Designed by teacher/s" + ("" if teacher_required else " (optional)"),
+                                    key=f"{prefix}_teacher", placeholder="Ex. Juan D. Dela Cruz")
+            grade = st.text_input("Grade level and section *", key=f"{prefix}_grade",
+                                  placeholder=grade_hint or "e.g., Grade 9 – Hydrogen")
+            sessions_pick = st.selectbox(
+                "No. of sessions", session_choices, key=f"{prefix}_sessions",
+                help=("'Auto' is recommended: the AI reads the competencies and the time allotment and creates exactly "
+                      "the sessions the topic needs (1–5). Pick a number to fix the count yourself." if allow_auto_sessions
+                      else "One log is generated per session — the Excel has five session columns (C–G)."))
+            medium = st.selectbox("Medium of instruction", ILAW_MEDIA, key=f"{prefix}_medium",
+                                  help="Every row of the output is written strictly in this language.")
+        with right:
+            term = st.selectbox("Select term", ILAW_TERMS, key=term_key, disabled=term_locked,
+                                index=ILAW_TERMS.index(term_default) if term_default in ILAW_TERMS else 0,
+                                help=(f"Locked to {term_default} — stated in the source for this topic." if term_locked
+                                      else "Pick the term your class is in. Default: Term 1."))
+            week = st.text_input("Select week", key=f"{prefix}_week",
+                                 placeholder=week_hint or "e.g., Week 5 — leave blank when the source lists no weeks")
+            duration = st.selectbox("Duration per session", ILAW_DURATIONS, key=f"{prefix}_duration")
+            strategy = st.selectbox("Lesson Design Pattern", ILAW_DESIGN_PATTERNS, key=f"{prefix}_strategy",
+                                    help="'Default' lets the AI choose the best-fit framework and name it at the top of "
+                                         "each session's flow. Pick a specific model to require it.")
+
+        st.markdown("**Weekly Intentions**")
+        st.caption("Give the overarching competency for the week — the AI unpacks it into the daily sessions.")
+        competency = st.text_area("Learning Competency", height=120, key=f"{prefix}_comp",
+                                  placeholder=competency_placeholder or
+                                  "Type or paste the competency/ies from the curriculum, your BOW, or a Lesson Exemplar…")
+        std_left, std_right = st.columns(2)
+        with std_left:
+            content_std = st.text_area("Content Standards (optional)", height=100, key=f"{prefix}_cs",
+                                       placeholder="The content standard that applies to the week…")
+        with std_right:
+            perf_std = st.text_area("Performance Standards (optional)", height=100, key=f"{prefix}_ps",
+                                    placeholder="The performance standard that applies to the week…")
+        objectives = st.text_area("General Learning Objectives (optional)", height=90, key=f"{prefix}_objectives",
+                                  placeholder="Leave blank and let the AI write per-session K.S.A. objectives, or list your own…")
+
+        st.markdown("**Learner Context**")
+        st.caption("Observations only — the AI uses them to choose activities, groupings, and accommodations.")
+        context_pick = st.selectbox("What are your learners like?", ILAW_LEARNER_CONTEXTS, key=f"{prefix}_ctx_pick")
+        context_notes = st.text_area("Your own observations (optional)", height=80, key=f"{prefix}_context",
+                                     placeholder="Strengths, interests, barriers, languages spoken at home…")
+
+        st.markdown("**Learning Resources Available**")
+        st.caption("Check what you actually have; the AI builds the sessions around them and offers alternatives.")
+        resource_columns = st.columns(2)
+        picked_resources = []
+        for resource_index, resource_item in enumerate(ILAW_RESOURCE_OPTIONS):
+            with resource_columns[resource_index % 2]:
+                if st.checkbox(resource_item, key=f"{prefix}_res__{resource_index}"):
+                    picked_resources.append(resource_item)
+        resource_other = st.text_input("Other resources (optional)", key=f"{prefix}_res_other",
+                                       placeholder="e.g., metre tape, bamboo sticks, barangay map")
+
+        note = st.text_area("Additional Instructions / Prompts (optional)", key=f"{prefix}_note",
+                            placeholder="e.g., Focus on gamification; include local examples from Agusan del Sur; "
+                                        "keep language simple for struggling readers.",
+                            help="Anything here is sent to the AI as extra instructions.")
+        submitted = st.form_submit_button(submit_label, type="primary", use_container_width=True)
+
+    learner_context = "" if str(context_pick).startswith("Other") else str(context_pick)
+    if str(context_notes or "").strip():
+        learner_context = (learner_context + ". " if learner_context else "") + str(context_notes).strip()
+    return {
+        "title": str(title or "").strip(), "area": str(area or "").strip(), "teacher": str(teacher or "").strip(),
+        "grade": str(grade or "").strip(), "session_count": ilaw_session_count(sessions_pick), "medium": medium,
+        "term": term, "week": str(week or "").strip(), "duration": duration, "strategy": strategy,
+        "competency": str(competency or "").strip(), "content_standards": str(content_std or "").strip(),
+        "performance_standards": str(perf_std or "").strip(), "objectives": str(objectives or "").strip(),
+        "context": learner_context, "resources": ", ".join(picked_resources +
+                                                            ([str(resource_other).strip()] if str(resource_other or "").strip() else [])),
+        "note": str(note or "").strip(), "submitted": submitted,
+    }
+
+
 st.title("📚 DepEd Teacher Tools Generator")
 st.caption("Developed by: Jose Dennis Plaza Chua")
 st.caption(f"Version {_APP_VERSION}")
@@ -3491,13 +3628,13 @@ with st.sidebar:
 lesson_tab, lil_tab, test_tab, ppt_tab = st.tabs(["📘 ILAW Lesson Plan", "📗 ILAW-LIL (Implementation Log)", "📝 Test Paper Generator", "🖥️ PowerPoint Generator"])
 
 with lesson_tab:
-    st.caption("Step 1 — pick your Grade level, Subject, and lesson topic from the built-in BOW library "
-               "(the official DepEd Budget of Work for Kindergarten to Grade 12). Step 2 — confirm the week's "
-               "intentions: competency, standards, learner context, lesson design pattern, and the materials you "
-               "actually have. The AI unpacks them into the daily ILAW sessions.")
+    st.caption("Step 1 — pick a BOW as your guide (optional): choose from the built-in DepEd Budget of Work "
+               "library, or upload your own BOW, or skip it and just type your lesson. The BOW is there to check "
+               "and copy from — nothing is filled in for you. Step 2 — write the week's intentions yourself; the "
+               "AI unpacks them into the daily ILAW sessions.")
 
-    # --- STEP 1: choose the lesson from the built-in BOW library (Grade → Subject → Topic). ---
-    st.subheader("1 · Choose your lesson (built-in BOW library)")
+    # --- STEP 1: pick a BOW as a guide (library, or upload your own). ---------
+    st.subheader("1 · BOW guide (optional — pick one, upload one, or skip)")
     lib = load_bow_library()
     grade_choices = [g for g in GRADE_CHOICES if g in lib] or GRADE_CHOICES
     bow_sel_grade = st.selectbox("Grade level *", grade_choices, key="ilaw_lib_grade",
@@ -3561,113 +3698,51 @@ with lesson_tab:
             st.error(f"Could not read the BOW file: {exc}")
             bow_struct = []
 
-    # --- STEP 2: Weekly Lesson Details & Intentions (reference-style form) ------
-    # The form mirrors the DepEd Tambayan ILAW planner: pick the topic from the BOW
-    # library, then confirm/edit the week's own context (competency, standards,
-    # objectives, learner context, design pattern, materials). Nothing is locked —
-    # the AI follows what the teacher gives it, with the BOW text as the authority.
+    # --- STEP 2: the teacher's own week. Nothing is pre-filled: the BOW pick in
+    # Step 1 is a guide (its text still grounds the draft), and every box belongs
+    # to the teacher. Same form as the LIL tab, on purpose.
     topic_hit = topic_lookup.get(bow_sel_topic) if bow_sel_topic else None
-    lib_entry = lib.get(bow_sel_grade, {}).get(bow_sel_subject, {}) if bow_sel_subject else {}
-    lib_area = str(lib_entry.get("area") or "") or bow_area_hint
-    topic_lesson = topic_hit[2]["lesson"] if topic_hit else ""
     topic_comps = list(topic_hit[2].get("competencies") or []) if topic_hit else []
-    week_default = f"Week {topic_hit[2]['from']}" if topic_hit and topic_hit[2].get("from") else ""
-    # The Term box locks ONLY when the source itself states this topic's term
-    # (e.g. 'Term 2 · Week 5 to 6'). For unit-based SHS BOWs the teacher chooses
-    # the term the class is actually in.
+    week_hint = f"Week {topic_hit[2]['from']}" if topic_hit and topic_hit[2].get("from") else ""
     term_locked = bool(topic_hit and str(topic_hit[1].get("term") or "").strip())
-    term_default = (str(topic_hit[1].get("term") or "").strip() if topic_hit else "") or bow_auto_term or "Term 1"
-    # Seed the widget state: Streamlit keeps the first value a keyed widget ever
-    # had, so without this the Term box stayed blank for unit-based SHS BOWs. A
-    # term the teacher already chose is never overwritten.
-    if term_locked or not str(st.session_state.get("ilaw_term") or "").strip():
-        st.session_state["ilaw_term"] = term_default
+    term_default = ((str(topic_hit[1].get("term") or "").strip() if topic_hit else "")
+                    or bow_auto_term or "Term 1")
+    if topic_hit:
+        with st.expander(f"📎 BOW guide — “{topic_hit[2]['lesson']}” (nothing is copied in for you)", expanded=False):
+            if topic_hit[1].get("term") or week_hint:
+                st.markdown(f"**Term/Week in this BOW:** {topic_hit[1].get('term') or 'not stated'} "
+                            f"· {week_hint or 'no weeks in this course — it lists units'}")
+            st.markdown("**Competencies in this BOW row** (copy what you need into Step 2):")
+            st.markdown("```\n" + ("\n".join(topic_comps) if topic_comps else
+                        "(this BOW row has no numbered competencies — use the BOW text below or type your own)") + "\n```")
+            st.caption(f"Source: {bow_sel_grade} · {bow_sel_subject} — the app still sends this BOW's text to the AI "
+                       "as the reference behind your competency and pacing.")
+    elif bow_file:
+        st.caption("Your uploaded BOW will be sent to the AI as the reference behind your competency and pacing.")
+    else:
+        st.caption("No BOW selected — the AI will search well-known public DepEd curriculum content for your "
+                   "learning area and grade, and the plan will be labelled NOT verified.")
 
-    with st.form("ilaw_form"):
-        st.subheader("2 · Weekly Lesson Details & Intentions")
-        st.caption("Pre-filled from the BOW when you pick a topic — edit any box. Your competency, standards, "
-                   "objectives, learner context, and materials are what the AI unpacks into the daily sessions; "
-                   "the BOW text stays the authority for competency wording and pacing.")
-        left, right = st.columns(2)
-        with left:
-            title = st.text_input("Name of lesson", value=topic_lesson, key=f"ilaw_title__{bow_sel_topic or 'manual'}",
-                                  placeholder="Auto-filled from the BOW topic — edit if you wish")
-            area = st.text_input("Learning area / subject *", value=lib_area,
-                                 key=f"ilaw_area__{bow_sel_grade}__{bow_sel_subject or 'none'}",
-                                 placeholder="e.g., Science")
-            teacher = st.text_input("Designed by teacher/s (optional)", key="ilaw_teacher",
-                                    placeholder="Ex. Juan D. Dela Cruz")
-            grade = st.text_input("Grade level and section *", value=bow_sel_grade or "",
-                                  key=f"ilaw_grade__{bow_sel_grade or 'none'}",
-                                  placeholder="e.g., Grade 9 – Hydrogen (add your section)")
-            sessions_pick = st.selectbox("No. of sessions", ILAW_SESSION_CHOICES, key="ilaw_sessions",
-                                         help="'Auto' is recommended: the AI reads the topic's competencies and weekly "
-                                              "time allotment and creates exactly the sessions the topic needs. Pick a "
-                                              "number to fix the count yourself.")
-            medium = st.selectbox("Medium of instruction", ILAW_MEDIA, key="ilaw_medium",
-                                  help="Every row of the plan is written strictly in this language.")
-        with right:
-            term = st.selectbox("Select term", ["Term 1", "Term 2", "Term 3"], key="ilaw_term",
-                                disabled=term_locked,
-                                index={"Term 1": 0, "Term 2": 1, "Term 3": 2}.get(term_default, 0),
-                                help=(f"Locked to {term_default} — stated in the BOW for this topic." if term_locked else
-                                      ("This course's BOW lists units, not weeks/terms — pick the term your class is "
-                                       "in. Default: Term 1." if topic_hit else None)))
-            week_input = st.text_input("Select week (optional)", value=week_default,
-                                       key=f"ilaw_week__{bow_sel_topic or 'manual'}",
-                                       placeholder="e.g., Week 5 — leave blank when the BOW lists no weeks")
-            duration = st.selectbox("Duration per session", ["40 minutes", "50 minutes", "60 minutes"], key="ilaw_duration")
-            strategy = st.selectbox("Lesson Design Pattern", ILAW_DESIGN_PATTERNS, key="ilaw_strategy",
-                                    help="'Default' lets the AI choose the best-fit framework and name it at the top of "
-                                         "each session's flow. Pick a specific model to require it.")
+    answers = render_weekly_intentions(
+        "ilaw", submit_label="Generate ILAW Lesson Plan (AI)",
+        caption="Nothing here is filled in for you — the BOW in Step 1 is just a guide. Your competency, standards, "
+                "objectives, learner context, and materials are what the AI unpacks into the daily sessions.",
+        grade_hint=bow_sel_grade or "", week_hint=week_hint, term_default=term_default, term_locked=term_locked)
 
-        st.markdown("**Weekly Intentions**")
-        st.caption("Give the overarching competency for the week — the AI unpacks it into the daily sessions.")
-        competency = st.text_area("Learning Competency *", value="\n".join(topic_comps), height=120,
-                                  key=f"ilaw_comp__{bow_sel_topic or 'manual'}",
-                                  placeholder="Type or paste the competency/ies from the curriculum or your BOW…",
-                                  help="Pre-filled from the BOW when the topic carries competencies. Edit it freely.")
-        std_left, std_right = st.columns(2)
-        with std_left:
-            content_std = st.text_area("Content Standards (optional)", height=100,
-                                       key=f"ilaw_cs__{bow_sel_topic or 'manual'}",
-                                       placeholder="The content standard that applies to the week…")
-        with std_right:
-            perf_std = st.text_area("Performance Standards (optional)", height=100,
-                                    key=f"ilaw_ps__{bow_sel_topic or 'manual'}",
-                                    placeholder="The performance standard that applies to the week…")
-        objectives = st.text_area("General Learning Objectives (optional)", height=90, key="ilaw_objectives",
-                                  placeholder="Leave blank and let the AI write per-session K.S.A. objectives, or list your own…")
-
-        st.markdown("**Learner Context**")
-        st.caption("Observations only — the AI uses them to choose activities, groupings, and accommodations.")
-        context_pick = st.selectbox("What are your learners like?", ILAW_LEARNER_CONTEXTS, key="ilaw_ctx_pick")
-        context_notes = st.text_area("Your own observations (optional)", height=80, key="ilaw_context",
-                                     placeholder="Strengths, interests, barriers, languages spoken at home…")
-
-        st.markdown("**Learning Resources Available**")
-        st.caption("Check what you actually have; the AI builds the sessions around them and offers alternatives.")
-        resource_columns = st.columns(2)
-        picked_resources = []
-        for resource_index, resource_item in enumerate(ILAW_RESOURCE_OPTIONS):
-            with resource_columns[resource_index % 2]:
-                if st.checkbox(resource_item, key=f"ilaw_res__{resource_index}"):
-                    picked_resources.append(resource_item)
-        resource_other = st.text_input("Other resources (optional)", key="ilaw_res_other",
-                                       placeholder="e.g., metre tape, bamboo sticks, barangay map")
-
-        note = st.text_area("Additional Instructions / Prompts (optional)", key="ilaw_note",
-                            placeholder="e.g., Focus on gamification; include local examples from Agusan del Sur; keep language simple for struggling readers.",
-                            help="Anything here is sent to the AI as extra instructions for your lesson plan.")
-        submitted = st.form_submit_button("Generate ILAW Lesson Plan (AI)", type="primary", use_container_width=True)
-
-    if submitted:
-        required = {"Learning area": area, "Grade level and section": grade, "Learning Competency": competency}
-        if not topic_hit and not str(title or "").strip():
-            required["Name of lesson / topic"] = bow_sel_topic
-        missing = [label for label, value in required.items() if not value or not str(value).strip()]
+    if answers["submitted"]:
+        competency_text = answers["competency"]
+        if topic_hit and not competency_text:
+            # Nothing typed? Fall back to the BOW row the teacher picked.
+            competency_text = "\n".join(topic_comps)
+        missing = [label for label, value in (("Learning area / subject", answers["area"]),
+                                             ("Grade level and section", answers["grade"]))
+                   if not str(value).strip()]
+        if not competency_text:
+            missing.append("Learning Competency — type it, or pick a BOW topic in Step 1")
+        if not answers["title"] and not topic_hit and not bow_file:
+            missing.append("Name of lesson")
         if missing:
-            st.error("Please complete: " + ", ".join(missing))
+            st.error("Please complete: " + "; ".join(missing))
         elif not api_key.strip():
             st.error(f"Add your {cfg['key_label']} in the sidebar.")
         else:
@@ -3682,30 +3757,26 @@ with lesson_tab:
                         bow_filename = bow_file.name
                     else:
                         bow_text, bow_filename = "", ""
-                    bow_title = str(title or "").strip() or (topic_hit[2]["lesson"] if topic_hit else "")
-                    # The teacher's own box wins; without it, the BOW row's week is
+                    bow_title = answers["title"] or (topic_hit[2]["lesson"] if topic_hit else "")
+                    # The teacher's own box wins; without it the BOW row's week is
                     # used. Weekless BOWs (SHS units, Kindergarten themes) send no
                     # week at all — never a phantom 'Week 1'.
-                    week = str(week_input or "").strip() or (
+                    week = answers["week"] or (
                         f"Week {topic_hit[2]['from']}" if topic_hit and topic_hit[2].get("from") else "")
                     # Source-stated term wins; otherwise the teacher's own choice.
-                    term = (topic_hit[1].get("term") if topic_hit else "") or str(term or "").strip() or bow_auto_term
+                    term = (topic_hit[1].get("term") if topic_hit else "") or answers["term"]
                     if bow_struct:
                         for _t in bow_struct:
                             _t["_selected_topic"] = bow_title  # title-match hint for weekless BOWs
-                    # Learner context: the preset, the teacher's own notes, or both.
-                    learner_context = "" if str(context_pick).startswith("Other") else str(context_pick)
-                    if str(context_notes or "").strip():
-                        learner_context = (learner_context + ". " if learner_context else "") + str(context_notes).strip()
-                    resources = ", ".join(picked_resources + ([str(resource_other).strip()]
-                                                            if str(resource_other or "").strip() else []))
-                    session_count = ilaw_session_count(sessions_pick)
-                    details = {"area": area, "grade": grade, "term": term, "week": week, "strategy": strategy,
-                               "title": bow_title, "sessions": session_count, "duration": duration, "medium": medium,
-                               "teacher": teacher, "context": learner_context, "note": note.strip(),
-                               "competency": competency.strip(), "content_standards": content_std.strip(),
-                               "performance_standards": perf_std.strip(), "objectives": objectives.strip(),
-                               "resources": resources,
+                    details = {"area": answers["area"], "grade": answers["grade"], "term": term, "week": week,
+                               "strategy": answers["strategy"], "title": bow_title,
+                               "sessions": answers["session_count"], "duration": answers["duration"],
+                               "medium": answers["medium"], "teacher": answers["teacher"],
+                               "context": answers["context"], "note": answers["note"],
+                               "competency": competency_text,
+                               "content_standards": answers["content_standards"],
+                               "performance_standards": answers["performance_standards"],
+                               "objectives": answers["objectives"], "resources": answers["resources"],
                                "bow": (summarize_bow(bow_struct, term, week) + "\n\nRAW BOW TEXT:\n" + bow_text) if bow_struct else bow_text,
                                "bow_filename": bow_filename,
                                "bow_match": match_bow_row(bow_struct, term, week)}
@@ -3726,14 +3797,15 @@ with lesson_tab:
             st.error(f"Could not prepare the Excel file: {exc}")
 
 with lil_tab:
-    st.caption("Create a Lesson Implementation Log (LIL) from an uploaded Lesson Exemplar. The exemplar is REQUIRED — "
-               "the app reads it first and auto-detects the Learning Area, Grade Level, and Term. All sessions export to ONE "
-               "DepEd LIL Excel file; Dates/Time stay blank for you to fill in.")
+    st.caption("Step 1 — upload a Lesson Exemplar as your guide (optional), or skip it and let the AI search "
+               "well-known public DepEd curriculum content for you. The exemplar is there to check and copy from — "
+               "nothing is filled in for you. Step 2 — write the week's intentions yourself (same form as the ILAW "
+               "tab); all sessions export to ONE DepEd LIL Excel file with Dates/Time left blank for you.")
     if not LIL_TEMPLATE.exists():
         st.error("The LESSON IMPLEMENTATION LOG TEMPLATE.xlsx file is missing from the app folder. Run ILAW_TeacherTools_Setup.bat to repair.")
-    # --- STEP 1: upload the Lesson Exemplar first — it drives every other field. ---
-    st.subheader("1 · Lesson Exemplar (required)")
-    lil_file = st.file_uploader("Upload Lesson Exemplar * (PDF, Word, or Excel) — the basis of the log",
+    # --- STEP 1: upload a Lesson Exemplar as a guide (optional). ---
+    st.subheader("1 · Lesson Exemplar guide (optional — upload one, or let the AI search)")
+    lil_file = st.file_uploader("Upload Lesson Exemplar (PDF, Word, or Excel)",
                                 type=["pdf", "docx", "xlsx", "xlsm", "xls"], key="lil_file")
     lil_meta = {"area": "", "grade": "", "term": "", "week": ""}
     if lil_file:
@@ -3745,81 +3817,89 @@ with lil_tab:
                      (("Learning Area", lil_meta["area"]), ("Grade", lil_meta["grade"]),
                       ("Term", lil_meta["term"]), ("Week", lil_meta["week"])) if value]
             if found:
-                st.success("Detected from your exemplar — " + " · ".join(found) +
-                           ". The locked fields below are filled from it.")
+                st.info("Guide only — detected from your exemplar: " + " · ".join(found) +
+                        ". Type what you need in Step 2; the exemplar's full text is the AI's basis.")
             else:
-                st.info("Exemplar read, but no standard DepEd header (Learning Area / Grade Level / Semester / Quarter) "
-                        "was detected. Fill the fields below manually — the full exemplar text is still the AI's basis.")
+                st.info("Exemplar read, but no standard DepEd header (Learning Area / Grade Level / Semester / "
+                        "Quarter) was detected. Its full text is still the AI's basis — fill Step 2 yourself.")
             with st.expander("See what the app read from your exemplar"):
                 st.markdown(lil_raw[:1500].replace("\n", "  \n") + ("…" if len(lil_raw) > 1500 else ""))
         except Exception as exc:
             st.error(f"Could not read the exemplar file: {exc}")
             lil_meta = {"area": "", "grade": "", "term": "", "week": ""}
     else:
-        st.info("Upload the Lesson Exemplar first — the app detects the Learning Area, Grade Level, and Term from it, "
-                "then you only confirm the rest.")
-    # --- STEP 2: log details. Fields lock when the exemplar provided them. ---
-    lil_locked_area = bool(lil_meta["area"])
-    lil_locked_grade = bool(lil_meta["grade"])
-    lil_locked_term = bool(lil_meta["term"])
-    lil_term_index = int(lil_meta["term"].split()[-1]) if lil_locked_term else None
-    with st.form("lil_form"):
-        st.subheader("2 · Log details")
-        l_left, l_right = st.columns(2)
-        with l_left:
-            lil_area = st.text_input("Learning Area *", value=lil_meta["area"], placeholder="e.g., Science",
-                                     disabled=lil_locked_area,
-                                     help="Detected from the uploaded exemplar." if lil_locked_area else None,
-                                     key="lil_area")
-            lil_term = st.selectbox("Term", ["Term 1", "Term 2", "Term 3"], key="lil_term",
-                                    disabled=lil_locked_term, index=(lil_term_index - 1) if lil_locked_term else None,
-                                    help="Detected from the exemplar's Semester/Quarter." if lil_locked_term else None)
-            lil_week = st.text_input("Week *", value=lil_meta["week"], placeholder="e.g., Week 3", key="lil_week")
-            lil_sessions = st.selectbox("Number of sessions (one log is generated per session)", [1, 2, 3, 4, 5], key="lil_sessions")
-        with l_right:
-            lil_teacher = st.text_input("Teachers Name *", placeholder="Used as 'Prepared by' on the log", key="lil_teacher")
-            lil_grade = st.text_input("Grade level and section *", value=lil_meta["grade"], placeholder="e.g., Grade 9 – Hydrogen",
-                                      disabled=lil_locked_grade,
-                                      help="Detected from the uploaded exemplar." if lil_locked_grade else None,
-                                      key="lil_grade")
-            lil_strategy = st.selectbox("Teaching Strategy Model *", TEACHING_STRATEGIES, index=None, placeholder="Select a required model", key="lil_strategy")
-        lil_note = st.text_area("Additional instructions (optional) — your own prompt to improve the output", placeholder="e.g., Base the flow on the second lesson in the exemplar; keep the assessment short; highlight cooperative learning.", help="Anything you add here is sent to the AI as extra instructions for your implementation log.", key="lil_note")
-        lil_submitted = st.form_submit_button("Generate ILAW-LIL", type="primary", use_container_width=True)
+        st.caption("No Lesson Exemplar uploaded — the AI will search well-known public DepEd curriculum content "
+                   "for your learning area and grade, and the log will be labelled NOT verified.")
 
-    if lil_submitted:
-        lil_missing = [label for label, value in {
-            "Learning Area": lil_area, "Teachers Name": lil_teacher, "Grade level and section": lil_grade,
-            "Week": lil_week, "Teaching Strategy Model": lil_strategy,
-        }.items() if not value or not str(value).strip()]
-        if lil_file is None:
-            lil_missing.append("Lesson Exemplar upload (required)")
+    # --- STEP 2: the same weekly form the ILAW tab uses. ---
+    lil_answers = render_weekly_intentions(
+        "lil", submit_label="Generate ILAW-LIL", teacher_required=True, allow_auto_sessions=False,
+        caption="Nothing is filled in for you — the Lesson Exemplar in Step 1 is just a guide. Your competency, "
+                "standards, objectives, learner context, and materials are what the AI turns into the log rows.",
+        grade_hint=lil_meta["grade"], term_default=lil_meta["term"] or "Term 1",
+        term_locked=bool(lil_meta["term"]), week_hint=lil_meta["week"])
+
+    if lil_answers["submitted"]:
+        lil_competency = lil_answers["competency"]
+        if not lil_competency and lil_file:
+            lil_competency = "see the uploaded Lesson Exemplar"
+        lil_missing = [label for label, value in (("Learning area / subject", lil_answers["area"]),
+                                                 ("Teachers name", lil_answers["teacher"]),
+                                                 ("Grade level and section", lil_answers["grade"]))
+                       if not str(value).strip()]
+        if not lil_competency:
+            lil_missing.append("Learning Competency — type it, or upload a Lesson Exemplar in Step 1")
         if lil_missing:
-            st.error("Please complete: " + ", ".join(lil_missing))
+            st.error("Please complete: " + "; ".join(lil_missing))
         elif not api_key.strip():
             st.error(f"Add your {cfg['key_label']} in the sidebar.")
         else:
             try:
                 with st.spinner("Reading the Lesson Exemplar and creating your Lesson Implementation Log..."):
-                    lil_exemplar_text = st.session_state.get("lil_exemplar_raw") or read_document_cached(lil_file.name, lil_file.getvalue())
-                    if not lil_meta.get("term"):
-                        lil_week_num = re.search(r"\d{1,2}", str(lil_week or ""))
-                        lil_derived = term_for_week(lil_week_num.group(0)) if lil_week_num else ""
-                        if lil_derived:
-                            st.info(f"Term not stated in the exemplar — inferred **{lil_derived}** from {lil_week} "
-                                    "(Weeks 1–12 → Term 1, 13–24 → Term 2, 25–36 → Term 3).")
-                            lil_term = lil_derived
+                    lil_exemplar_text = ""
+                    if lil_file:
+                        lil_exemplar_text = (st.session_state.get("lil_exemplar_raw")
+                                             or read_document_cached(lil_file.name, lil_file.getvalue()))
+                    lil_week_text = lil_answers["week"] or lil_meta.get("week") or ""
+                    lil_term = lil_meta.get("term") or lil_answers["term"]
                     lil_details = {
-                        "area": lil_area, "grade": lil_grade, "teacher": lil_teacher,
-                        "termweek": f"{lil_term} · {lil_week}",
-                        "strategy": lil_strategy, "sessions": lil_sessions, "note": lil_note.strip(),
+                        "area": lil_answers["area"], "grade": lil_answers["grade"], "teacher": lil_answers["teacher"],
+                        "term": lil_term, "week": lil_week_text,
+                        "termweek": " · ".join(p for p in (lil_term, lil_week_text) if p) or "not stated",
+                        "strategy": lil_answers["strategy"], "sessions": lil_answers["session_count"],
+                        "duration": lil_answers["duration"], "medium": lil_answers["medium"],
+                        "title": lil_answers["title"], "competency": lil_competency,
+                        "content_standards": lil_answers["content_standards"],
+                        "performance_standards": lil_answers["performance_standards"],
+                        "objectives": lil_answers["objectives"], "context": lil_answers["context"],
+                        "resources": lil_answers["resources"], "note": lil_answers["note"],
                         "exemplar": lil_exemplar_text,
-                        "exemplar_filename": lil_file.name,
+                        "exemplar_filename": lil_file.name if lil_file else "",
+                        "online_search": not bool(lil_exemplar_text.strip()),
                     }
+                    if lil_details["online_search"]:
+                        # No exemplar: research public DepEd content, exactly like the
+                        # ILAW tab does when no BOW is available.
+                        with st.spinner("No Lesson Exemplar — researching public DepEd curriculum sources..."):
+                            research_note, online_sources = find_competency_online(lil_details)
+                        lil_details["exemplar"] = "ONLINE RESEARCH NOTE — verify before use:\n" + research_note
+                        lil_details["online_sources"] = online_sources
+                        lil_details["reference_source"] = (
+                            "Google Search grounding" if st.session_state.get("provider", _DEFAULT_PROVIDER) == _DEFAULT_PROVIDER
+                            else f"{st.session_state.get('provider', _DEFAULT_PROVIDER)} AI research note")
+                    else:
+                        lil_details["reference_source"] = f"Lesson Exemplar uploaded by teacher: {lil_file.name}"
                     st.session_state.lil_plan, st.session_state.lil_details = generate_lil(api_key, lil_details), lil_details
             except Exception as exc:
                 st.error(f"Could not generate the implementation log: {exc}")
 
     if lil_plan := st.session_state.get("lil_plan"):
+        if str(lil_plan.get("curriculum_verification", "")).upper() == "VERIFIED":
+            st.success("✅ Alignment VERIFIED against the uploaded Lesson Exemplar.")
+        else:
+            st.warning("⚠️ NOT verified against a Lesson Exemplar — this is a usable draft, not a checked log. "
+                       + str(lil_plan.get("verification_note") or
+                             "Upload the Lesson Exemplar or double-check the competency and activities before filing."))
         st.subheader(first_option(lil_plan.get("log_title"), "Lesson Implementation Log"))
         st.info(first_option(lil_plan.get("overview")))
         st.write(f"**Learning Competency:** {first_option(lil_plan.get('learning_competency'))}")

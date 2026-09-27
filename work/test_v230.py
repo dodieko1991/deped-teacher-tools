@@ -97,7 +97,7 @@ def check(name, cond, extra=""):
         fails.append(name)
 
 
-check("version is 2.3.0", app._APP_VERSION == "2.4.0", app._APP_VERSION)
+check("version is 2.3.0", app._APP_VERSION == "2.5.0", app._APP_VERSION)
 
 # --- 1. the rule asks for a complete plan and forbids refusing ----------------
 rule = app.STRICT_CURRICULUM_VERIFICATION
@@ -240,7 +240,7 @@ except Exception as exc:  # noqa: BLE001
 # default.
 src = Path(app.__file__).read_text(encoding="utf-8")
 for needle in ('term_locked = bool(topic_hit and str(topic_hit[1].get("term") or "").strip())',
-               'or str(term or "").strip() or bow_auto_term',
+               'term = (topic_hit[1].get("term") if topic_hit else "") or answers["term"]',
                'disabled=term_locked,',
                'if topic_options and not any(str(t.get("term", "")).strip()'):
     check(f"term handling: {needle[:44]}", needle in src)

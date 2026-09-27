@@ -94,19 +94,26 @@ check("le: no header -> all empty", empty == {"area": "", "grade": "", "term": "
 src = Path(__file__).resolve().parent.parent.joinpath("app.py").read_text(encoding="utf-8")
 lil_start = src.index("with lil_tab:")
 lil_src = src[lil_start: src.index("with test_tab:")]
-check("order: exemplar uploader before LIL form", lil_src.find("lil_file") != -1
-      and lil_src.find('st.form("lil_form")') > lil_src.find("lil_file"))
-check("order: detection before form", lil_src.find("detect_exemplar_meta") < lil_src.find('st.form("lil_form")'))
-check("lock: LIL area disabled when detected", "disabled=lil_locked_area" in lil_src)
-check("lock: LIL grade disabled when detected", "disabled=lil_locked_grade" in lil_src)
-check("lock: LIL term disabled when detected", "disabled=lil_locked_term" in lil_src)
-check("lock: LIL term index from detection", "lil_term_index" in lil_src)
-check("required: exemplar required message", lil_src.count("required") >= 1)
-check("detected banner shown", "Detected from your exemplar" in lil_src)
-check("reuse: cached exemplar text reused at submit", "lil_exemplar_raw" in lil_src.split("if lil_submitted")[1][:2000])
+# v2.5.0: the LIL tab mirrors the ILAW tab — the exemplar is an OPTIONAL guide,
+# nothing is pre-filled or locked, and both tabs share one form builder.
+check("order: exemplar uploader before the shared form",
+      lil_src.find("lil_file") != -1 and lil_src.find("render_weekly_intentions") > lil_src.find("lil_file"))
+check("order: detection (guide only) before the form",
+      lil_src.find("detect_exemplar_meta") < lil_src.find("render_weekly_intentions"))
+check("both tabs share the same form builder",
+      'render_weekly_intentions(\n        "ilaw"' in src and 'render_weekly_intentions(\n        "lil"' in lil_src)
+check("lock: only the Term box can lock, and only from the exemplar",
+      "term_locked=bool(lil_meta" in lil_src and "disabled=lil_locked" not in lil_src)
+check("exemplar is optional: no 'required' upload gate",
+      "Lesson Exemplar upload (required)" not in lil_src and 'key="lil_file"' in lil_src)
+check("detected meta is offered as a guide only", "Guide only" in lil_src)
+check("no-exemplar path searches for the competency",
+      "find_competency_online" in lil_src and "online_search" in lil_src)
+check("reuse: cached exemplar text reused at submit",
+      "lil_exemplar_raw" in lil_src.split("if lil_answers[")[1][:2500])
 
 # ------------------------------------------------- version
-check("version: 2.0.0", app._APP_VERSION == "2.4.0", app._APP_VERSION)
+check("version: 2.4.0", app._APP_VERSION == "2.5.0", app._APP_VERSION)
 
 print()
 if failures:

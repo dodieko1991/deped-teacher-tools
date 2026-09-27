@@ -71,7 +71,7 @@ def check(name, cond, extra=""):
         fails.append(name)
 
 
-check("version is 1.9.0", app._APP_VERSION == "2.4.0", app._APP_VERSION)
+check("version is 1.9.0", app._APP_VERSION == "2.5.0", app._APP_VERSION)
 
 # --- 1. first answer parses -> NO retry, NO extra call -----------------------
 calls = {"n": 0}
@@ -150,7 +150,7 @@ src = Path(app.__file__).read_text(encoding="utf-8")
 # v2.3.0: the ILAW draft + review passes go through _ask_plan_completing, which
 # wraps _ask_and_parse and never lets a curriculum refusal end the generation.
 for needle in ("plan = _ask_plan_completing(make_prompt(details)",
-               "plan = _ask_and_parse(make_lil_prompt(details)",
+               "plan = _ask_plan_completing(make_lil_prompt(details)",
                "plan = _ask_and_parse(make_test_prompt(enriched_basis, d)",
                "plan = _ask_and_parse(prompt,",  # ppt plan + sessions
                "corrected = _ask_plan_completing("):

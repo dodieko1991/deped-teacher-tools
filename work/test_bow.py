@@ -129,25 +129,29 @@ check("summary: contains rows + comps", "Weeks 1 to 3" in s and row_comps[0][:40
 
 # ------------------------------------------------- tab order + BOW-first layout
 src = Path(__file__).resolve().parent.parent.joinpath("app.py").read_text(encoding="utf-8")
-check("order: BOW uploader before form", src.find("ilaw_bow") != -1 and src.find("ilaw_bow") < src.find('st.form("ilaw_form")'))
-check("order: BOW summary rendered before form", src.find("ilaw_bow_render") < src.find('st.form("ilaw_form")'))
+# v2.5.0: both tabs share render_weekly_intentions(), so the form is created
+# inside that helper; the BOW picker/guide must still come first in the tab body.
+ilaw_form_call = src.find('render_weekly_intentions(\n        "ilaw"')
+check("order: BOW uploader before the weekly form",
+      0 < src.find("ilaw_bow") < ilaw_form_call, f"picker={src.find('ilaw_bow')} form={ilaw_form_call}")
+check("order: BOW guide panel before the weekly form",
+      0 < src.find("BOW guide") < ilaw_form_call)
 tab_decl = src.split("st.tabs(")[1][:200]
 check("order: ILAW first, LIL second", tab_decl.find("ILAW Lesson Plan") < tab_decl.find("ILAW-LIL"), tab_decl[:100])
 
 # ------------------------------------------------- lock behavior
-check("lock: topic lock defined", "topic_hit = topic_lookup.get(" in src)
-# v2.4.0 (+ v2.3.0): the reference-style ILAW form PRE-FILLS the teacher's own
-# boxes instead of disabling them, so only the Term box still locks — and only
-# when the BOW itself states the term for that topic.
-check("lock: the BOW topic pre-fills the lesson title box",
-      "value=topic_lesson" in src and "ilaw_title__" in src)
-check("lock: the BOW topic pre-fills area/grade/term",
-      all(needle in src for needle in ("value=lib_area", "value=bow_sel_grade or", "term_default")))
-check("lock: only the Term box still locks from the source",
+check("lock: topic lookup defined", "topic_hit = topic_lookup.get(" in src)
+# v2.5.0: the BOW is a GUIDE — nothing is copied into the teacher's boxes, and
+# only the Term box locks (and only when the BOW itself states that term).
+check("no pre-fill: the form gets no value= from the BOW pick",
+      all(needle not in src for needle in ("value=topic_lesson", "value=lib_area", "value=topic_comps")))
+check("the BOW pick is offered as a copy-from guide",
+      "BOW guide" in src and "copy what you need into Step 2" in src)
+check("only the Term box still locks from the source",
       src.count("disabled=term_locked") >= 1 and "disabled=bool(topic_hit)" not in src)
-check("lock: teacher competency box pre-filled from BOW competencies",
-      '"\\n".join(topic_comps)' in src)
-check("lock: title prefilled from BOW row", "bow_title" in src) 
+check("the picked BOW row stays the silent competency fallback",
+      'competency_text = "\\n".join(topic_comps)' in src)
+check("BOW row still supplies the title fallback at submit", "bow_title" in src)
 
 # ------------------------------------------------- prompt wiring
 p = app.make_prompt({"grade": "9", "area": "Science", "term": "Term 1", "week": "Week 1",
@@ -168,7 +172,7 @@ check("prompt: LIL keeps source-priority", "CURRICULUM SOURCE PRIORITY" in app.m
      "teacher": "T", "note": "", "exemplar": "EXEMPLAR BODY"}))
 
 # ------------------------------------------------- version
-check("version: 1.9.0", app._APP_VERSION == "2.4.0", app._APP_VERSION)
+check("version: 1.9.0", app._APP_VERSION == "2.5.0", app._APP_VERSION)
 
 print()
 if failures:

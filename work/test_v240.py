@@ -97,7 +97,7 @@ def check(name, cond, extra=""):
         fails.append(name)
 
 
-check("version is 2.4.0", app._APP_VERSION == "2.4.0", app._APP_VERSION)
+check("version is 2.4.0", app._APP_VERSION == "2.5.0", app._APP_VERSION)
 
 # --- 1. the reference-style input lists --------------------------------------
 check("design patterns: 'Default (AI selects)' is offered first",
@@ -182,18 +182,30 @@ check("named pattern: phases are pinned exactly",
 check("empty strategy falls back to 'Default'",
       "the teacher left the framework to you" in app.make_prompt(dict(BASE, strategy="")))
 
-# --- 7. the tab wires the new boxes ------------------------------------------
+# --- 7. ONE shared form, used by BOTH tabs, with nothing pre-filled ----------
 src = Path(app.__file__).read_text(encoding="utf-8")
-for needle in ('st.form("ilaw_form")', '"2 · Weekly Lesson Details & Intentions"', "ilaw_comp__", "ilaw_cs__",
-               "ilaw_ps__", "ilaw_objectives", "ilaw_ctx_pick", "ilaw_res__", "ilaw_res_other",
-               "ilaw_sessions", "ilaw_week__", "ilaw_medium", "ilaw_strategy", "value=topic_lesson",
-               "value=lib_area", "ilaw_session_count(sessions_pick)",
-               'st.form_submit_button("Generate ILAW Lesson Plan (AI)"'):
-    check(f"tab wiring: {needle[:44]}", needle in src)
-check("no ILAW field is disabled by picking a BOW topic any more", "disabled=bool(topic_hit)" not in src)
-check("the topic's competencies pre-fill the competency box", '"\\n".join(topic_comps)' in src)
+for needle in ("def render_weekly_intentions(prefix, *, submit_label, caption", 'st.form(f"{prefix}_form")',
+               '"2 · Weekly Lesson Details & Intentions"', 'key=f"{prefix}_comp"', 'key=f"{prefix}_cs"',
+               'key=f"{prefix}_ps"', 'key=f"{prefix}_objectives"', 'key=f"{prefix}_ctx_pick"',
+               'key=f"{prefix}_res__{resource_index}"', 'key=f"{prefix}_res_other"', 'key=f"{prefix}_sessions"',
+               'key=f"{prefix}_week"', 'key=f"{prefix}_medium"', 'key=f"{prefix}_strategy"',
+               "ilaw_session_count(sessions_pick)", 'submit_label="Generate ILAW Lesson Plan (AI)"',
+               'submit_label="Generate ILAW-LIL"', 'render_weekly_intentions(\n        "ilaw"',
+               'render_weekly_intentions(\n        "lil"'):
+    check(f"tab wiring: {needle[:46]}", needle in src)
+for needle in ("value=topic_lesson", "value=lib_area", "value=bow_sel_grade", "disabled=bool(topic_hit)",
+               "value=week_default", "Pre-filled from the BOW"):
+    check(f"nothing pre-filled: {needle}", needle not in src)
+check("the LIL tab uses the SAME form (not its own)",
+      'render_weekly_intentions(\n        "lil"' in src and 'st.form("lil_form")' not in src)
+check("the BOW pick is a copy-from guide only",
+      "BOW guide" in src and "copy what you need into Step 2" in src)
+check("a picked BOW row is still the silent competency fallback",
+      'competency_text = "\\n".join(topic_comps)' in src)
+check("the LIL exemplar is optional and can fall back to AI search",
+      "online_search" in src and "find_competency_online" in src and "Upload Lesson Exemplar (PDF, Word, or Excel)" in src)
 check("learner context preset + notes are combined", 'str(context_pick)' in src and "learner_context" in src)
-check("checked resources are joined for the prompt", '" ".join(picked_resources' not in src and "picked_resources" in src)
+check("checked resources are joined for the prompt", "picked_resources" in src)
 
 # --- 8. every provider still offered ----------------------------------------
 for provider in ("Google Gemini", "OpenRouter", "Groq", "Mistral"):

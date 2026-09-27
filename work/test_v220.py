@@ -194,7 +194,7 @@ check("4e. prompt has the BOW MATCH hint", "BOW MATCH" in prompt, "")
 check("4f. raw BOW text included", "RAW BOW TEXT:" in prompt and len(details["bow"]) > 900, len(details["bow"]))
 
 # --- 5. version ---
-check("5. version is 2.2.0", app._APP_VERSION == "2.4.0", app._APP_VERSION)
+check("5. version is 2.2.0", app._APP_VERSION == "2.5.0", app._APP_VERSION)
 
 print(f"\n{len(failures)} failures" if failures else "\nALL PASS")
 sys.exit(1 if failures else 0)
