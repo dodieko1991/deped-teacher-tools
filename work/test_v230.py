@@ -97,7 +97,7 @@ def check(name, cond, extra=""):
         fails.append(name)
 
 
-check("version is 2.3.0", app._APP_VERSION == "2.5.0", app._APP_VERSION)
+check("version is 2.3.0", app._APP_VERSION == "2.6.0", app._APP_VERSION)
 
 # --- 1. the rule asks for a complete plan and forbids refusing ----------------
 rule = app.STRICT_CURRICULUM_VERIFICATION

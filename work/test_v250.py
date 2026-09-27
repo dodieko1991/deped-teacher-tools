@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""v2.5.0 — BOW/Lesson Exemplar are GUIDES, the two tabs share one form, and the
+"""v2.6.0 — BOW/Lesson Exemplar are GUIDES, the two tabs share one form, and the
 LIL tab works with or without a Lesson Exemplar.
 
 What the teacher asked for:
@@ -96,7 +96,7 @@ def check(name, cond, extra=""):
         fails.append(name)
 
 
-check("version is 2.5.0", app._APP_VERSION == "2.5.0", app._APP_VERSION)
+check("version is 2.6.0", app._APP_VERSION == "2.6.0", app._APP_VERSION)
 src = Path(app.__file__).read_text(encoding="utf-8")
 
 # --- 1. nothing is pre-filled any more ---------------------------------------
@@ -223,4 +223,4 @@ print()
 if fails:
     print(f"FAILURES ({len(fails)}):", fails)
     sys.exit(1)
-print("ALL v2.5.0 GUIDE-STYLE TABS TESTS PASSED")
+print("ALL v2.6.0 GUIDE-STYLE TABS TESTS PASSED")

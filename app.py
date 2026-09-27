@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-_APP_VERSION = "2.5.0"  # bump this when shipping new updates
+_APP_VERSION = "2.6.0"  # bump this when shipping new updates
 from copy import copy
 from datetime import date, datetime
 from io import BytesIO
@@ -2424,14 +2424,17 @@ Translate this style into a concrete, calm color theme (bg, accent, title, text 
 suits the subject, and choose 'shape' values that match the style (e.g., petals/ovals for Floral,
 clean rectangles for Business, diamonds for Research, circles/stars for Space).
 
-PICTURES: every content slide gets a real drawn illustration generated from 'image_idea'.
-Describe a simple flat scene that matches the slide topic AND the style (e.g., 'big sun with three
-rays over green hills', 'rain clouds and arrows showing the water cycle', 'seed growing in three
-steps in a garden', 'planets orbiting the sun in a starry sky'). Mention concrete objects (sun,
-hills, water, plants, animals, stars, buildings) so the drawing is recognizable.
+PICTURES: every content slide gets its own picture built from 'image_idea'.
+Write 'image_idea' as a VIVID, PICTURE-ONLY description of what should be seen: the subject and what
+it is doing, the setting, and the main colors (e.g., 'two Filipino pupils measuring a tomato plant
+in a school garden, bright green leaves, sunny morning', 'rain clouds over green hills with arrows
+curving back to a river, blue and white', 'planets orbiting a big yellow sun in a starry sky').
+Name concrete, drawable objects (sun, hills, water, plants, animals, stars, buildings, tools) and
+match the slide topic AND the design style. Never ask for words, labels, charts, or letters inside
+the picture — pictures only.
 
 Respond ONLY with valid JSON, no markdown:
-{{"deck_title": "string (include the session number)", "subject": "string", "theme": {{"bg": "RRGGBB hex", "accent": "RRGGBB hex", "title": "RRGGBB hex", "text": "RRGGBB hex"}}, "slides": [{{"title": "max 8 words", "bullets": ["see content rules above"], "shape": "rect|oval|triangle|diamond|arrow|none", "image_idea": "short description of a simple flat illustration matching the style"}}]}}
+{{"deck_title": "string (include the session number)", "subject": "string", "theme": {{"bg": "RRGGBB hex", "accent": "RRGGBB hex", "title": "RRGGBB hex", "text": "RRGGBB hex"}}, "slides": [{{"title": "max 8 words", "bullets": ["see content rules above"], "shape": "rect|oval|triangle|diamond|arrow|none", "image_idea": "one-sentence vivid picture description: subject and action, setting, main colors, concrete objects; never any text inside the image"}}]}}
 Rules: slide 1 is the title slide (deck_title + one subtitle bullet with subject and grade level).
 Choose a color theme that is DISTINCT from decks of the other sessions (avoid harsh neon colors).
 Extra teacher instructions: {d.get('note') or 'None'}
@@ -2654,8 +2657,352 @@ def _shrink_picture_jpeg(png_bytes):
         return png_bytes
 
 
-def build_presentation(plan, teacher, style=None, template_file=None):
-    """Build the .pptx: style-aware theme, drawn slide pictures, ~under the 3 MB cap.
+# ======================================================================================
+# AI IMAGE ENGINE (PowerPoint Generator)
+# Mirrors the DepEd Tambayan generator: a real image model is asked for one picture per
+# slide, and when that model is unavailable, out of quota, or billing-locked, the app
+# falls back to a free keyless image service and finally to its own offline drawing
+# engine — so a deck ALWAYS ships with pictures.
+#
+# Only providers that can really RETURN an image are listed below. Groq and Mistral are
+# text-only, so they are deliberately absent from the picture dropdown.
+# ======================================================================================
+IMAGE_STYLE_PRESETS = {
+    "DepEd Tambayan look — bright Filipino school cartoon (recommended)":
+        "Premium, bright, friendly, educational cartoon vector graphic, set in a Philippine school environment: ",
+    "Flat vector illustration — clean shapes, soft palette":
+        "Clean flat vector illustration, soft pastel palette, simple geometric shapes, generous white space: ",
+    "Cute 3D clay render — toy-like and friendly":
+        "Cute 3D clay render, soft studio lighting, toy-like friendly characters, rounded shapes: ",
+    "Children's book watercolor — warm and gentle":
+        "Warm watercolor children's book illustration, soft edges, gentle pastel washes, hand-painted look: ",
+    "Realistic classroom photo — natural light":
+        "Realistic photograph, natural window light, Filipino public school classroom, shallow depth of field: ",
+    "Minimal line art — printable, ink-friendly":
+        "Minimal black-and-white line art drawing, clean bold strokes, plain white background: ",
+    "Chalkboard doodle — hand-drawn on green board":
+        "Hand-drawn chalk doodle on a dark green chalkboard, white and pastel chalk strokes: ",
+    "Chibi anime — playful and expressive":
+        "Chibi anime style illustration, expressive friendly faces, bright cheerful colors, thick outlines: ",
+}
+_DEFAULT_IMAGE_STYLE = "DepEd Tambayan look — bright Filipino school cartoon (recommended)"
+_IMAGE_PROMPT_SUFFIX = (
+    " Bright, clear, classroom-friendly composition for a lesson slide, "
+    "no text, no letters, no words, no watermark, no logo."
+)
+
+IMAGE_ENGINES = [
+    {
+        "name": "Auto — best free engine available (recommended)",
+        "kind": "auto",
+        "needs": None,
+        "hint": "Uses your Gemini key when one is set (free image quota), then the keyless Pollinations service, then the app's own drawings. Nothing to configure.",
+    },
+    {
+        "name": "Google Gemini image (Nano Banana) — your Gemini key",
+        "kind": "gemini",
+        "needs": "Google Gemini",
+        "hint": "Real AI artwork through the same Google AI Studio key used in the sidebar. Free daily image quota; a spent quota simply moves the next slide to the fallback route.",
+        "key_url": "https://aistudio.google.com/apikey",
+    },
+    {
+        "name": "Pollinations — free, no API key at all",
+        "kind": "pollinations",
+        "needs": None,
+        "hint": "Keyless public image service — the same guaranteed fallback the DepEd Tambayan generator uses. Slower, but there is nothing to sign up for.",
+    },
+    {
+        "name": "OpenRouter Image API — your OpenRouter key",
+        "kind": "openrouter",
+        "needs": "OpenRouter",
+        "hint": "Uses the OpenRouter key in the sidebar with its dedicated /images endpoint. OpenRouter has no free image models, so each picture is billed to your OpenRouter credits.",
+        "key_url": "https://openrouter.ai/keys",
+    },
+    {
+        "name": "Together AI — FLUX.1 schnell free endpoint",
+        "kind": "together",
+        "needs": "Together AI",
+        "hint": "Black Forest Labs FLUX.1 schnell on Together AI's free image endpoint. Paste a free Together AI API key below (it is kept for this browser session only).",
+        "key_url": "https://api.together.xyz/settings/api-keys",
+    },
+    {
+        "name": "None — built-in offline drawings only",
+        "kind": "local",
+        "needs": None,
+        "hint": "No AI pictures at all: every slide still gets a picture from the app's own drawing engine (flat vector illustrations that match the deck's colors).",
+    },
+]
+IMAGE_ENGINE_NAMES = [item["name"] for item in IMAGE_ENGINES]
+_IMAGE_ENGINE_BY_NAME = {item["name"]: item for item in IMAGE_ENGINES}
+_DEFAULT_IMAGE_ENGINE = IMAGE_ENGINE_NAMES[0]
+_LOCAL_IMAGE_ENGINE = "None — built-in offline drawings only"
+
+# Gemini image models, best first. Several are tried because Google's free image quota
+# comes and goes per model and per account.
+GEMINI_IMAGE_MODELS = [
+    "gemini-3.1-flash-image",
+    "gemini-3.1-flash-lite-image",
+    "gemini-2.5-flash-image",
+    "gemini-3.1-flash-image-preview",
+    "gemini-3-pro-image-preview",
+]
+OPENROUTER_IMAGE_MODELS = [
+    "google/gemini-2.5-flash-image",
+    "google/gemini-3.1-flash-image",
+    "google/gemini-2.5-flash-image-preview",
+]
+_TOGETHER_IMAGE_MODEL = "black-forest-labs/FLUX.1-schnell-Free"
+_AI_PIC_SIZE = 560  # square pixels stored in the deck (the slide frame is square)
+_AI_JPEG_BUDGET = 220_000
+_POLLINATIONS_LOGO_TRIM = 0.08  # the keyless service stamps a small corner logo; shave it off
+
+
+def _provider_key(name):
+    """The API key typed for a provider, whether or not it is the selected one."""
+    if name == st.session_state.get("provider"):
+        return str(st.session_state.get("api_key") or "").strip()
+    return str((st.session_state.get("keys") or {}).get(name) or "").strip()
+
+
+def image_engine_key(engine):
+    """The key the chosen engine needs, or "" when it needs none."""
+    item = _IMAGE_ENGINE_BY_NAME.get(engine) or {}
+    needs = item.get("needs")
+    if not needs:
+        return ""
+    if needs in PROVIDERS:
+        return _provider_key(needs)
+    return str(((st.session_state.get("img_keys") or {}).get(needs)) or "").strip()
+
+
+def image_engine_ready(engine):
+    """(ready, message) — ready says whether the chosen engine can be attempted now."""
+    item = _IMAGE_ENGINE_BY_NAME.get(engine) or _IMAGE_ENGINE_BY_NAME[_DEFAULT_IMAGE_ENGINE]
+    kind = item["kind"]
+    if kind in ("auto", "pollinations", "local"):
+        return True, item["hint"]
+    needs = item.get("needs")
+    if image_engine_key(engine):
+        return True, f"{needs} key detected — this engine will be used."
+    return False, (f"Paste your {needs} API key in the sidebar (or in the key box below), "
+                   "choose another engine, or use Auto — the built-in drawings always work.")
+
+
+def _extract_inline_image(data):
+    """Pull the base64 picture out of a Gemini generateContent reply."""
+    for candidate in (data or {}).get("candidates") or []:
+        content = (candidate or {}).get("content") or {}
+        for part in content.get("parts") or []:
+            inline = (part or {}).get("inlineData") or (part or {}).get("inline_data") or {}
+            raw = inline.get("data")
+            if raw:
+                try:
+                    return base64.b64decode(raw)
+                except Exception:
+                    continue
+    return None
+
+
+def _gemini_image_bytes(key, prompt, models=None, timeout=180):
+    """One real picture from a Gemini image model (the DepEd Tambayan primary route)."""
+    last = "no picture returned"
+    for model in (models or GEMINI_IMAGE_MODELS):
+        for variant in (0, 1):
+            body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+            if variant:
+                body["generationConfig"] = {"responseModalities": ["TEXT", "IMAGE"],
+                                            "imageConfig": {"aspectRatio": "1:1"}}
+            url = ("https://generativelanguage.googleapis.com/v1beta/models/"
+                   f"{model}:generateContent?key={urllib.parse.quote(key)}")
+            try:
+                request = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
+                                                 headers={"Content-Type": "application/json", "User-Agent": _HTTP_UA},
+                                                 method="POST")
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                detail = ""
+                try:
+                    detail = exc.read().decode("utf-8", "replace")[:180]
+                except Exception:
+                    pass
+                last = f"{model}: HTTP {exc.code} {detail}"
+                break  # a hard API error will not be fixed by retrying the same model
+            except Exception as exc:
+                last = f"{model}: {exc}"
+                break
+            image = _extract_inline_image(data)
+            if image:
+                return image
+            last = f"{model}: the reply contained no image part"
+    raise RuntimeError(last)
+
+
+def _openrouter_image_bytes(key, prompt, models=None, timeout=180):
+    """One picture from OpenRouter's dedicated image endpoint (/api/v1/images)."""
+    last = "no picture returned"
+    for model in (models or OPENROUTER_IMAGE_MODELS):
+        try:
+            data = _http_json("https://openrouter.ai/api/v1/images", {"model": model, "prompt": prompt},
+                              key, timeout=timeout)
+        except Exception as exc:
+            last = f"{model}: {exc}"
+            continue
+        item = ((data or {}).get("data") or [{}])[0] or {}
+        raw = item.get("b64_json") or item.get("b64") or item.get("image") or ""
+        if raw:
+            try:
+                return base64.b64decode(raw)
+            except Exception as exc:
+                last = f"{model}: {exc}"
+                continue
+        last = f"{model}: the reply contained no image"
+    raise RuntimeError(last)
+
+
+def _pollinations_image_bytes(prompt, timeout=150, width=1024, height=1024):
+    """Keyless free image service — the guaranteed fallback route."""
+    url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt[:900])
+           + f"?width={width}&height={height}&nologo=true&model=flux")
+    request = urllib.request.Request(url, headers={"User-Agent": _HTTP_UA, "Accept": "image/*"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        payload = response.read()
+    head = payload[:600].lower()
+    if not payload or len(payload) < 1024 or b"<html" in head or b"<error" in head:
+        raise RuntimeError("the free image service returned no picture (it may be rate-limited)")
+    return payload
+
+
+def _together_image_bytes(key, prompt, timeout=180):
+    """FLUX.1 schnell on Together AI's free image endpoint."""
+    data = _http_json("https://api.together.xyz/v1/images/generations",
+                      {"model": _TOGETHER_IMAGE_MODEL, "prompt": prompt, "width": 1024, "height": 1024,
+                       "steps": 4, "n": 1, "response_format": "b64_json"}, key, timeout=timeout)
+    item = ((data or {}).get("data") or [{}])[0] or {}
+    raw = item.get("b64_json") or item.get("b64") or ""
+    if not raw:
+        raise RuntimeError("Together AI returned no image")
+    return base64.b64decode(raw)
+
+
+def image_prompt_for(description, style=None, prefix=""):
+    """The exact prompt sent to the image model (style preset, or your own words)."""
+    text = str(description or "").strip()
+    lead = str(prefix or "").strip() or IMAGE_STYLE_PRESETS.get(style or _DEFAULT_IMAGE_STYLE, "").strip()
+    if lead and not lead.endswith((":", ",", ".", ";", "—", "-")):
+        lead += ":"
+    return " ".join(part for part in (lead, text) if part).strip() + _IMAGE_PROMPT_SUFFIX
+
+
+def _looks_like_image(image_bytes):
+    """True when the bytes carry a picture format python-pptx can embed without Pillow."""
+    head = bytes(image_bytes or b"")[:12]
+    return (head.startswith(b"\x89PNG\r\n\x1a\n") or head.startswith(b"\xff\xd8\xff")
+            or head.startswith(b"GIF8") or head.startswith(b"BM") or head[8:12] == b"WEBP")
+
+
+def _auto_image_engines():
+    """Free-first chain used by the Auto engine: Gemini image (when a key exists), then Pollinations."""
+    chain = []
+    if _provider_key("Google Gemini"):
+        chain.append("Google Gemini image (Nano Banana) — your Gemini key")
+    chain.append("Pollinations — free, no API key at all")
+    return chain
+
+
+def _prepare_ai_picture(image_bytes, trim_bottom=0.0):
+    """Square-crop and compress one AI picture so it drops into the slide frame.
+
+    `trim_bottom` shaves that fraction off the bottom edge first, which removes the
+    small corner watermark the free keyless service prints on its pictures.
+    Returns None when the bytes are not a picture the deck can embed — the caller then
+    keeps the built-in drawing instead of shipping a broken slide.
+    """
+    if _PILImage is None:
+        return bytes(image_bytes) if _looks_like_image(image_bytes) else None
+    try:
+        with _PILImage.open(BytesIO(image_bytes)) as img:
+            img = img.convert("RGB")
+            if trim_bottom > 0:
+                keep = max(1, int(img.height * (1 - min(0.2, trim_bottom))))
+                img = img.crop((0, 0, img.width, keep))
+            side = min(img.size)
+            left, top = (img.width - side) // 2, (img.height - side) // 2
+            img = img.crop((left, top, left + side, top + side)).resize((_AI_PIC_SIZE, _AI_PIC_SIZE), _PILImage.LANCZOS)
+            quality, buf = 88, BytesIO()
+            while quality >= 25:
+                buf = BytesIO()
+                img.save(buf, format="JPEG", quality=quality, optimize=True)
+                if buf.tell() <= _AI_JPEG_BUDGET:
+                    return buf.getvalue()
+                quality -= 10
+            return buf.getvalue()
+    except Exception:
+        return None
+
+
+def generate_ai_image(description, engine=None, style=None, prefix="", timeout=180, cache=None):
+    """Generate one slide picture through the chosen engine.
+
+    Returns (jpeg_bytes, engine_used, error). jpeg_bytes is None only when every route
+    failed; the caller then uses the built-in drawing so the slide is never empty.
+    """
+    engine = engine or _DEFAULT_IMAGE_ENGINE
+    prompt = image_prompt_for(description, style, prefix)
+    cache = cache if cache is not None else st.session_state.setdefault("img_cache", {})
+    errors = []
+    chain = _auto_image_engines() if (_IMAGE_ENGINE_BY_NAME.get(engine, {}).get("kind") == "auto") else [engine]
+    for name in chain:
+        item = _IMAGE_ENGINE_BY_NAME.get(name) or {}
+        kind = item.get("kind")
+        if kind == "local":
+            continue
+        cache_key = f"{name}|{prompt}"
+        if cache_key in cache:
+            return cache[cache_key], name, ""
+        key = image_engine_key(name)
+        try:
+            if kind == "gemini":
+                image = _gemini_image_bytes(key, prompt, timeout=timeout)
+            elif kind == "openrouter":
+                image = _openrouter_image_bytes(key, prompt, timeout=timeout)
+            elif kind == "together":
+                image = _together_image_bytes(key, prompt, timeout=timeout)
+            elif kind == "pollinations":
+                image = _pollinations_image_bytes(prompt, timeout=timeout)
+            else:
+                continue
+        except Exception as exc:
+            errors.append(f"{name.split(' — ')[0]}: {exc}")
+            continue
+        prepared = _prepare_ai_picture(image, trim_bottom=_POLLINATIONS_LOGO_TRIM if kind == "pollinations" else 0.0)
+        if not prepared:
+            errors.append(f"{name.split(' — ')[0]}: the picture could not be read")
+            continue
+        try:
+            cache[cache_key] = prepared
+        except Exception:
+            pass
+        return prepared, name, ""
+    return None, "", "; ".join(errors[-2:])
+
+
+def _remember_image_stats(ai_count, drawn_count, engine_used, errors):
+    """Stash how the pictures were made so the UI can report it (safe outside Streamlit)."""
+    try:
+        st.session_state["ppt_img_stats"] = {"ai": ai_count, "drawn": drawn_count,
+                                             "engine": engine_used, "errors": errors[-3:]}
+    except Exception:
+        pass
+
+
+def build_presentation(plan, teacher, style=None, template_file=None,
+                       image_engine=None, image_style=None, image_max=0, image_prefix=""):
+    """Build the .pptx: style-aware theme, pictures (AI or drawn), ~under the 3 MB cap.
+
+    `image_max` is how many of the deck's slides get a real AI picture; the remaining
+    slides keep the built-in drawn illustration. Every AI picture that fails falls back
+    to the drawing engine, so the deck is complete either way.
 
     With `template_file` (uploaded .pptx/.potx bytes), the user's own template
     carries the design: its slide size, masters, layouts, and theme are kept, its
@@ -2764,12 +3111,28 @@ def build_presentation(plan, teacher, style=None, template_file=None):
         return slide
 
     total_deck_budget = 2_700_000  # stay safely under the requested 3 MB deck ceiling
+    ai_count, drawn_count, used_engines, image_errors = 0, 0, [], []
+    ai_budget = max(0, int(image_max or 0))
+    engine_choice = image_engine or _LOCAL_IMAGE_ENGINE
     for index, slide_plan in enumerate(plan.get("slides", [])):
         idea = str(slide_plan.get("image_idea") or "").strip()
-        pic = _draw_slide_picture(theme, idea, str(theme.get("accent") or "2E6FB5"), str(theme.get("bg") or "F5F9FF"),
-                                  f"{index}-{slide_plan.get('title', '')}") if idea else None
+        pic = None
+        if idea and ai_budget > 0 and _IMAGE_ENGINE_BY_NAME.get(engine_choice, {}).get("kind") != "local":
+            pic, served_by, err = generate_ai_image(idea, engine=engine_choice, style=image_style, prefix=image_prefix)
+            if pic:
+                ai_count += 1
+                ai_budget -= 1
+                used_engines.append(served_by)
+            elif err:
+                image_errors.append(err)
+        if not pic:
+            pic = _draw_slide_picture(theme, idea, str(theme.get("accent") or "2E6FB5"), str(theme.get("bg") or "F5F9FF"),
+                                      f"{index}-{slide_plan.get('title', '')}") if idea else None
+            if pic:
+                drawn_count += 1
         slide = add_slide(slide_plan.get("title", f"Slide {index + 1}"), slide_plan.get("bullets", []), slide_plan.get("shape", "none"),
                           is_title_slide=index == 0, image_png=pic)
+    _remember_image_stats(ai_count, drawn_count, used_engines[0] if used_engines else "", image_errors)
     buffer = BytesIO()
     deck.save(buffer)
     return buffer.getvalue()
@@ -4044,6 +4407,55 @@ with ppt_tab:
                                   type=["pptx", "potx"], key="p_template",
                                   help="Your template's theme, fonts, colors, masters, and slide size are used for the deck. Leave empty for the AI's auto design.")
 
+    # ------------------------------------------------------------------
+    # AI picture engine. Only services that can really RETURN an image are
+    # offered here — Groq and Mistral are text-only, so they are absent.
+    # ------------------------------------------------------------------
+    with st.expander("🖼️ Slide pictures — AI image engine (DepEd Tambayan style)", expanded=False):
+        st.caption("Real AI artwork for the slides, exactly like the DepEd Tambayan generator: an image model draws each "
+                   "picture. Only image-capable services are listed — **Groq and Mistral are text-only**, so they never "
+                   "appear in this list. Any picture that fails is replaced automatically by the app's own drawing, so the "
+                   "deck is always complete.")
+        img_left, img_right = st.columns(2)
+        with img_left:
+            p_img_engine = st.selectbox("Picture engine", IMAGE_ENGINE_NAMES, index=0, key="p_img_engine")
+            _img_ready, _img_message = image_engine_ready(p_img_engine)
+            if _img_ready:
+                st.success(_img_message)
+            else:
+                st.warning(_img_message)
+        with img_right:
+            p_img_style = st.selectbox("Picture style", list(IMAGE_STYLE_PRESETS), index=0, key="p_img_style",
+                                       help="The look the image model is asked for. Pick what fits the lesson.")
+            p_img_count = st.slider("AI pictures per deck", 0, 16, 6, key="p_img_count",
+                                    help="Each AI picture takes roughly 5–20 seconds. The other slides keep the app's "
+                                         "drawn illustration. 0 = drawings only, no AI pictures.")
+        _img_chosen = _IMAGE_ENGINE_BY_NAME.get(p_img_engine) or {}
+        if _img_chosen.get("needs") == "Together AI":
+            _img_keys = st.session_state.setdefault("img_keys", {})
+            _img_keys["Together AI"] = st.text_input("Together AI API key (pictures only)", value=_img_keys.get("Together AI", ""),
+                                                     type="password", key="p_together_key",
+                                                     help="Kept for this browser session only; it is used just for slide pictures.")
+            st.link_button("Get a free Together AI API key", _img_chosen["key_url"])
+        elif _img_chosen.get("needs") in PROVIDERS:
+            _img_key_state = "✅ key detected" if image_engine_key(p_img_engine) else "⚠️ no key pasted yet"
+            st.caption(f"Uses the **{_img_chosen['needs']}** key from the sidebar — {_img_key_state}. "
+                       "Switch providers in the sidebar to use that provider's key instead.")
+        with st.expander("🖌️ Ask for your own look (advanced)"):
+            st.caption("Leave this empty to use the Picture style above. Anything you type here is placed in front of every "
+                       "picture request — e.g. 'soft watercolor, pastel palette, no people'.")
+            p_img_prefix = st.text_area("Picture prompt prefix (optional)", key="p_img_prefix", height=80,
+                                        placeholder=IMAGE_STYLE_PRESETS[_DEFAULT_IMAGE_STYLE].strip())
+            if st.button("🧪 Test the picture engine (one image)", key="p_img_test"):
+                with st.spinner("Asking the picture engine for one test image..."):
+                    _test_bytes, _test_engine, _test_err = generate_ai_image(
+                        "a teacher and pupils in a bright Philippine classroom with a chalkboard and plants",
+                        engine=p_img_engine, style=p_img_style, prefix=p_img_prefix)
+                if _test_bytes:
+                    st.image(_test_bytes, caption=f"Served by: {_test_engine}")
+                else:
+                    st.warning(f"No AI picture this time ({_test_err}). The app's built-in drawings will be used instead.")
+
     # Detect sessions from the uploaded file so the user can pick ONE at a time.
     detected_sessions = st.session_state.get("ppt_sessions") or []
     detected_meta = st.session_state.get("ppt_meta") or {}
@@ -4085,7 +4497,16 @@ with ppt_tab:
                                        "session_number": session["session"], "session_topic": session["topic"]}
                         deck_plan = generate_ppt_plan(basis, ppt_details)
                         deck_bytes = build_presentation(deck_plan, p_teacher.strip(), p_style,
-                                                        p_template.getvalue() if p_template else None)
+                                                        p_template.getvalue() if p_template else None,
+                                                        image_engine=p_img_engine, image_style=p_img_style,
+                                                        image_max=p_img_count, image_prefix=p_img_prefix)
+                    _img_stats = st.session_state.get("ppt_img_stats") or {}
+                    if _img_stats.get("ai"):
+                        st.success(f"🖼️ {_img_stats['ai']} AI picture(s) drawn by {_img_stats.get('engine') or 'the image model'}"
+                                   + (f" · {_img_stats['drawn']} built-in drawing(s)" if _img_stats.get("drawn") else ""))
+                    elif _img_stats.get("drawn"):
+                        _img_note = (_img_stats.get("errors") or [""])[0]
+                        st.info("🖼️ No AI picture this time — the app's built-in drawings were used" + (f" ({_img_note})" if _img_note else "") + ".")
                     safe_title = re.sub(r"[^A-Za-z0-9]+", "_", str(deck_plan.get("deck_title") or f"Session_{session['session']}")).strip("_")[:60] or f"Session_{session['session']}"
                     st.session_state.ppt_deck = {"filename": f"{safe_title}.pptx", "bytes": deck_bytes,
                                                  "session": session["session"], "topic": session["topic"], "style": p_style}
@@ -4102,4 +4523,4 @@ with ppt_tab:
                                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
                                key="ppt_dl_deck", use_container_width=True, type="primary")
         st.caption("Generate again with a different Design style (or another session) for a fresh look — same lesson, new design. "
-                   "Lightweight by design: flat color shapes and AI-suggested illustrations, so each deck stays a few dozen KB.")
+                   "Pictures come from the AI image engine you picked (the app's own drawings are the fallback), so each deck stays light.")

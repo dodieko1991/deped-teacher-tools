@@ -94,7 +94,7 @@ check("le: no header -> all empty", empty == {"area": "", "grade": "", "term": "
 src = Path(__file__).resolve().parent.parent.joinpath("app.py").read_text(encoding="utf-8")
 lil_start = src.index("with lil_tab:")
 lil_src = src[lil_start: src.index("with test_tab:")]
-# v2.5.0: the LIL tab mirrors the ILAW tab — the exemplar is an OPTIONAL guide,
+# v2.6.0: the LIL tab mirrors the ILAW tab — the exemplar is an OPTIONAL guide,
 # nothing is pre-filled or locked, and both tabs share one form builder.
 check("order: exemplar uploader before the shared form",
       lil_src.find("lil_file") != -1 and lil_src.find("render_weekly_intentions") > lil_src.find("lil_file"))
@@ -113,7 +113,7 @@ check("reuse: cached exemplar text reused at submit",
       "lil_exemplar_raw" in lil_src.split("if lil_answers[")[1][:2500])
 
 # ------------------------------------------------- version
-check("version: 2.4.0", app._APP_VERSION == "2.5.0", app._APP_VERSION)
+check("version: 2.4.0", app._APP_VERSION == "2.6.0", app._APP_VERSION)
 
 print()
 if failures:

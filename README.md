@@ -2,7 +2,7 @@
 
 A Streamlit app for Philippine DepEd teachers: **ILAW Lesson Plans, ILAW-LIL Implementation Logs, Test Papers (with TOS + Answer Key), and PowerPoint generators** — all grounded on your own **Budget of Work (BOW)** and powered by any of four AI providers.
 
-**Developed by: Jose Dennis Plaza Chua** · Current version: **v1.7.0**
+**Developed by: Jose Dennis Plaza Chua** · Current version: **v2.6.0**
 
 ---
 
@@ -113,6 +113,20 @@ Without any BOW at all, the AI works from well-known public DepEd curriculum con
 
 - Upload your ILAW/exemplar → the app detects the sessions; pick **one session** and a **slide count** (10/15/20/30) and **design theme** (Floral, Business, Education, Research, …).
 - The AI writes the content and picks fitting **images**; decks stay under ~3 MB.
+- **🖼️ AI picture engine (v2.6.0)** — the slides get *real AI-generated pictures*, the same way the DepEd Tambayan generator does. Under *Slide pictures* you pick:
+
+  | Picture engine | API key needed | Cost |
+  |---|---|---|
+  | **Auto — best free engine available** (default) | none | free — Gemini image when a key is set, then Pollinations |
+  | Google Gemini image (Nano Banana) | your **Gemini** key (sidebar) | free daily image quota |
+  | Pollinations | **none at all** | free, keyless |
+  | OpenRouter Image API | your **OpenRouter** key (sidebar) | paid per image |
+  | Together AI — FLUX.1 schnell | a free **Together AI** key | free endpoint |
+  | None — built-in offline drawings | none | free, works offline |
+
+- **Only image-capable services appear in that list** — Groq and Mistral are text-only, so they stay available for lesson plans, tests and slide text but are never offered as picture engines.
+- **8 picture styles** (Filipino school cartoon, flat vector, 3D clay, watercolor, realistic photo, line art, chalkboard, chibi) plus an *Ask for your own look* box for your own prompt, and a **🧪 Test the picture engine** button that shows one sample image before you build the deck.
+- Choose how many slides get an AI picture (**0–16**); the rest keep the app's own drawn illustration. Every failed picture falls back automatically, so **a deck is never left without pictures**, and after building, the app tells you which engine served it.
 - Follows the DepEd flow: Title → Objectives → Motivation → Prior Knowledge → Content (with real paragraph meanings) → Example → Guided Activity → Application → HOTS question → Assessment → Generalization → Assignment → Closing.
 - **Optional: upload your own .pptx/.potx template** — the AI fills YOUR design with its content (slide size, colors, and layout are preserved).
 
@@ -124,7 +138,7 @@ The sidebar has a short feedback form (Name, Rating, Feedback, Suggestions) that
 
 ## 🧰 For developers
 
-- `app.py` — the whole app (single file, ~3,100 lines).
-- `work/test_*.py` — **17 offline test suites** (300+ checks). Run: `python work/test_bow.py` etc. (no server needed).
+- `app.py` — the whole app (single file).
+- `work/test_*.py` — **27 offline test suites** (600+ checks). Run: `python work/test_v260.py` etc. (no server needed).
 - `work/rebuild_installer.py` — rebuilds `ILAW_TeacherTools_Setup.bat` after editing `app.py`: `py work/rebuild_installer.py`.
 - Version lives in `_APP_VERSION` at the top of `app.py` — bump it on every change; the sidebar, title, and installer all show it.

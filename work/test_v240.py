@@ -97,7 +97,7 @@ def check(name, cond, extra=""):
         fails.append(name)
 
 
-check("version is 2.4.0", app._APP_VERSION == "2.5.0", app._APP_VERSION)
+check("version is 2.4.0", app._APP_VERSION == "2.6.0", app._APP_VERSION)
 
 # --- 1. the reference-style input lists --------------------------------------
 check("design patterns: 'Default (AI selects)' is offered first",
